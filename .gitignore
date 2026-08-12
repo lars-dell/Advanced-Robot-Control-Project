@@ -1,1 +1,40 @@
-.venv
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build & Packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# CasADi & Optimization Outputs
+*.casadi
+casadi_codegen/
+qpOASES_*.log
+
+# Genesis & Simulation Outputs / Logs
+.genesis/
+logs/
+*.png
+*.mp4
+*.avi
+
+# IDE & Editor Configuration
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
