@@ -201,11 +201,21 @@ class GenesisSim:
         ee_quat_np = _tensor_to_numpy(ee_quat_raw)
         ee_rot_np = _tensor_to_numpy(gs.utils.geom.quat_to_R(ee_quat_np))
 
+        # Dynamic bias vector h(q, dq) = C(q, dq) * dq + g(q) if available
+        h_np = np.zeros(self._arm_dof_dim, dtype=np.float64)
+        if hasattr(self.robot, "get_gravity_force"):
+            try:
+                g_raw = self.robot.get_gravity_force()
+                h_np = _tensor_to_numpy(g_raw)[:self._arm_dof_dim]
+            except Exception:
+                pass
+
         return {
             "q": q_np,
             "dq": dq_np,
             "J": J_np,
             "B": M_np,
+            "h": h_np,
             "ee_pos": ee_pos_np,
             "ee_rot": ee_rot_np,
         }
