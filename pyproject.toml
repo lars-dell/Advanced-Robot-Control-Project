@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "multi-priority-qp-control"
+version = "0.1.0"
+description = "Multi-Priority Cartesian Impedance Control Based on Quadratic Programming Optimization in Genesis Simulator"
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "genesis-world",
+    "casadi",
+    "numpy>=1.22.0",
+    "torch",
+    "matplotlib",
+    "qpsolvers",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "flake8",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
