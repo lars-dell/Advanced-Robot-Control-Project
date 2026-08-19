@@ -1,0 +1,271 @@
+"""
+Experiment 7: 4-Way Baseline Comparison & Conflicting Task Reproduction.
+
+Directly reproduces Section V-A (Figures 1-4) of the reference paper:
+    "Multi-Priority Cartesian Impedance Control Based on Quadratic Programming Optimization"
+    Enrico Mingo Hoffman et al. (IEEE ICRA 2018).
+
+Compares 4 distinct controller classes derived from BaseController under conflicting task requirements:
+    1. ClassicalTransposeController: tau = J^T * f (Eq. 9)
+    2. SaturatedAlgebraicController: tau = clip(J_0^T * f_0 + (I - J_0^T * J_bar_0^T) * tau_1) (Eq. 10)
+    3. WeightedQPController: min sum w_i ||e_i||^2 s.t. torque bounds
+    4. QPImpedanceController: Multi-priority cascade with strict equality constraints (Eq. 18)
+"""
+
+import argparse
+import logging
+import os
+import sys
+import time
+from typing import Dict, List, Tuple, Any
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Ensure root workspace directory is in sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from envs.genesis_sim import GenesisSim
+from controllers import (
+    BaseController,
+    QPImpedanceController,
+    ClassicalTransposeController,
+    SaturatedAlgebraicController,
+    WeightedQPController,
+)
+from tasks import TaskStack, CartesianPoseTask, JointPostureTask
+
+logger = logging.getLogger("Exp7_BaselineComparison")
+
+
+def build_controller(control_mode: str) -> BaseController:
+    """
+    Factory creating a BaseController instance matching the requested baseline mode.
+    """
+    if control_mode == "classical_transpose":
+        return ClassicalTransposeController(n_dofs=7)
+    elif control_mode == "saturated_algebraic":
+        return SaturatedAlgebraicController(n_dofs=7, reg_pinv=1e-4)
+    elif control_mode == "weighted_qp":
+        return WeightedQPController(n_dofs=7, weights=[1.0, 0.3], use_qpoases=True, reg_eps=1e-4)
+    elif control_mode == "hierarchical_qp":
+        return QPImpedanceController(n_dofs=7, use_qpoases=True, reg_eps=1e-4)
+    else:
+        raise ValueError(f"Unknown control mode: {control_mode}")
+
+
+def run_single_controller_sim(
+    control_mode: str,
+    sim_time: float = 5.0,
+    dt: float = 0.005,
+    device: str = "cpu"
+) -> Dict[str, np.ndarray]:
+    """
+    Runs a single simulation run for the specified controller under conflicting task targets.
+
+    Args:
+        control_mode: 'classical_transpose', 'saturated_algebraic', 'weighted_qp', or 'hierarchical_qp'.
+        sim_time: Duration in seconds (default: 5.0s).
+        dt: Control timestep in seconds.
+        device: 'cpu' or 'gpu'.
+
+    Returns:
+        Dict[str, np.ndarray]: Logged trajectory telemetry.
+    """
+    sim = GenesisSim(
+        model_xml="panda_cylinder.xml",
+        show_viewer=False,
+        dt=dt,
+        device=device
+    )
+
+    controller: BaseController = build_controller(control_mode)
+
+    # Initial state
+    state = sim.get_state()
+    p_init = state["ee_pos"].copy()
+
+    # Conflicting task definitions:
+    # High-Priority Task (Level 0): Periodic sine wave along Z
+    z_center = p_init[2]
+    z_amp = 0.06
+    z_freq = 0.5  # 0.5 Hz periodic tracking
+
+    # Low-Priority Task (Level 1): Conflicting unreachable XY setpoint
+    xy_target = p_init[:2] + np.array([0.25, 0.20])
+
+    # Build 2-Level Conflicting Task Stack
+    task_stack = TaskStack()
+
+    # Level 0 Task: Z-Axis Sine Tracking
+    def z_traj(t: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        z_des = z_center + z_amp * np.sin(2.0 * np.pi * z_freq * t)
+        z_dot = 2.0 * np.pi * z_freq * z_amp * np.cos(2.0 * np.pi * z_freq * t)
+        return np.array([p_init[0], p_init[1], z_des]), np.eye(3), np.array([0.0, 0.0, z_dot])
+
+    task_z = CartesianPoseTask(
+        name="z_priority_0",
+        priority=0,
+        kp=800.0,
+        kd=60.0,
+        mode="z",
+        trajectory_fn=z_traj
+    )
+    task_stack.add_task(task_z)
+
+    # Level 1 Task: Conflicting XY Target
+    def xy_traj(t: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        return np.array([xy_target[0], xy_target[1], p_init[2]]), np.eye(3), np.zeros(3)
+
+    task_xy = CartesianPoseTask(
+        name="xy_priority_1",
+        priority=1,
+        kp=500.0,
+        kd=45.0,
+        mode="xy",
+        trajectory_fn=xy_traj
+    )
+    task_stack.add_task(task_xy)
+
+    n_steps = int(sim_time / dt)
+
+    log_t: List[float] = []
+    log_p_act: List[np.ndarray] = []
+    log_p_des: List[np.ndarray] = []
+    log_tau: List[np.ndarray] = []
+
+    for step in range(n_steps):
+        t_curr = step * dt
+        state = sim.get_state()
+        p_curr = state["ee_pos"]
+
+        # Current reference point
+        z_des = z_center + z_amp * np.sin(2.0 * np.pi * z_freq * t_curr)
+        p_des = np.array([xy_target[0], xy_target[1], z_des])
+        state["target_pos"] = p_des
+        state["target_vel"] = np.array([0.0, 0.0, 2.0 * np.pi * z_freq * z_amp * np.cos(2.0 * np.pi * z_freq * t_curr)])
+
+        # Compute torques using BaseController interface
+        tau_cmd = controller.compute_torques(state=state, target=task_stack, t=t_curr)
+
+        sim.apply_torques(tau_cmd)
+        sim.step()
+
+        log_t.append(t_curr)
+        log_p_act.append(p_curr.copy())
+        log_p_des.append(p_des.copy())
+        log_tau.append(tau_cmd.copy())
+
+    return {
+        "time": np.array(log_t),
+        "p_act": np.array(log_p_act),
+        "p_des": np.array(log_p_des),
+        "torques": np.array(log_tau)
+    }
+
+
+def run_experiment_7(
+    sim_time: float = 5.0,
+    dt: float = 0.005,
+    device: str = "cpu",
+    save_plot: bool = True
+) -> Dict[str, Dict[str, np.ndarray]]:
+    """
+    Executes the 4-way comparative study using the newly introduced BaseController subclasses.
+    """
+    logger.info("=================================================================")
+    logger.info("Running Experiment 7: 4-Way Baseline Comparison (Hoffman et al.)")
+    logger.info("=================================================================")
+
+    modes = [
+        ("classical_transpose", "1. Classical Transpose Law (Eq. 9)"),
+        ("saturated_algebraic", "2. Saturated Algebraic Null-Space (Eq. 10)"),
+        ("weighted_qp", "3. Single-Level Weighted-Sum QP"),
+        ("hierarchical_qp", "4. Proposed Hierarchical Cascade QP (Eq. 18)")
+    ]
+
+    all_results: Dict[str, Dict[str, np.ndarray]] = {}
+
+    for mode_key, mode_title in modes:
+        logger.info(f"Simulating: {mode_title}...")
+        res = run_single_controller_sim(
+            control_mode=mode_key,
+            sim_time=sim_time,
+            dt=dt,
+            device=device
+        )
+        all_results[mode_key] = res
+
+    if save_plot:
+        plot_experiment_7(all_results)
+
+    logger.info("Experiment 7 completed successfully.")
+    return all_results
+
+
+def plot_experiment_7(
+    results: Dict[str, Dict[str, np.ndarray]],
+    output_path: str = "exp7_baseline_comparison.png"
+) -> None:
+    """
+    Generates a 4-panel figure directly reproducing Figures 1-4 of Hoffman et al. ICRA 2018.
+    """
+    fig, axs = plt.subplots(2, 2, figsize=(16, 12))
+    fig.suptitle(
+        "Experiment 7: 4-Way Baseline Comparison under Conflicting Tasks (Hoffman et al. ICRA 2018)",
+        fontsize=14,
+        fontweight="bold"
+    )
+
+    panels = [
+        ("classical_transpose", axs[0, 0], "Fig 1 Reproduction: Classical Transpose Control (Eq. 9)\n[No Priority Hierarchy - Mutual Task Interference]"),
+        ("saturated_algebraic", axs[0, 1], "Fig 2 Reproduction: Saturated Algebraic Null-Space (Eq. 10)\n[Naive Torque Clipping - Nullspace Distortions]"),
+        ("weighted_qp", axs[1, 0], "Weighted-Sum QP (Single-Level)\n[Soft Penalties - Secondary Task Pollutes Primary Task]"),
+        ("hierarchical_qp", axs[1, 1], "Fig 4 Reproduction: Proposed Hierarchical Cascade QP (Eq. 18)\n[Strict Priority - Perfect P0 Tracking & Safe Torques]")
+    ]
+
+    for mode_key, ax, title in panels:
+        res = results[mode_key]
+        t = res["time"]
+        p_act = res["p_act"]
+        p_des = res["p_des"]
+
+        # Plot X, Y, Z actual vs desired
+        ax.plot(t, p_des[:, 0], "r--", alpha=0.6, label="x_des (unreachable)")
+        ax.plot(t, p_act[:, 0], "r-", label="x_act")
+
+        ax.plot(t, p_des[:, 1], "g--", alpha=0.6, label="y_des (unreachable)")
+        ax.plot(t, p_act[:, 1], "g-", label="y_act")
+
+        ax.plot(t, p_des[:, 2], "b--", alpha=0.8, linewidth=2, label="z_des (Priority 0)")
+        ax.plot(t, p_act[:, 2], "b-", linewidth=2, label="z_act")
+
+        ax.set_xlabel("Time [s]")
+        ax.set_ylabel("Cartesian Position [m]")
+        ax.set_title(title, fontsize=11, fontweight="bold")
+        ax.grid(True)
+        ax.legend(loc="upper right", fontsize=9)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=200)
+    logger.info(f"Saved 4-way baseline comparative plot to {output_path}")
+    plt.close()
+
+
+def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    parser = argparse.ArgumentParser(description="Experiment 7: 4-Way Baseline Comparison")
+    parser.add_argument("--time", type=float, default=5.0, help="Simulation time in seconds")
+    parser.add_argument("--dt", type=float, default=0.005, help="Simulation timestep in seconds")
+    parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "gpu"], help="Physics backend")
+    args = parser.parse_args()
+
+    run_experiment_7(
+        sim_time=args.time,
+        dt=args.dt,
+        device=args.device,
+        save_plot=True
+    )
+
+
+if __name__ == "__main__":
+    main()

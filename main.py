@@ -72,19 +72,20 @@ def run_simulation(
     cart_task = CartesianPoseTask(
         name="cartesian_primary",
         priority=0,
-        kp=400.0,
-        kd=40.0,
-        is_6d=False,
+        kp=4.0,
+        kd=1.0,
+        mode="3d",
         use_full_impedance=False
     )
+
     task_stack.add_task(cart_task)
 
     # Priority 1: Secondary Joint Posture Null-Space Task
     posture_task = JointPostureTask(
         name="posture_secondary",
         priority=1,
-        kp=20.0,
-        kd=4.0,
+        kp=2.0,
+        kd=0.1,
         q_des=target_q_null
     )
     task_stack.add_task(posture_task)
@@ -98,6 +99,7 @@ def run_simulation(
     log_ee_pos_des: List[np.ndarray] = []
     log_torques: List[np.ndarray] = []
     log_errors: List[np.ndarray] = []
+    log_forces: List[np.ndarray] = []
 
     for step in range(n_steps):
         t_curr = step * dt
@@ -114,9 +116,11 @@ def run_simulation(
         # Apply torques to robot joints
         sim.apply_torques(torques)
 
-        # Optional: Apply disturbance force halfway through simulation
-        if 2.0 <= t_curr <= 2.2:
-            sim.apply_external_disturbance(force=np.array([10.0, 0.0, 0.0]), link_name="hand")
+        # Apply disturbance force between t=8s and t=9s
+        applied_dist = np.zeros(3)
+        if 8.0 <= t_curr <= 9.0:
+            applied_dist = np.array([10.0, 0.0, 0.0])
+            sim.apply_external_disturbance(force=applied_dist, link_name="hand")
 
         # Step physics simulation engine
         sim.step()
@@ -127,6 +131,7 @@ def run_simulation(
         log_ee_pos_des.append(target_ee_pos.copy())
         log_torques.append(torques.copy())
         log_errors.append(cart_task.compute_error(state))
+        log_forces.append(state["ee_force"].copy() + applied_dist)
 
         if step % 100 == 0:
             err = cart_task.compute_error(state)
@@ -142,9 +147,70 @@ def run_simulation(
         "ee_pos_des": np.array(log_ee_pos_des),
         "torques": np.array(log_torques),
         "errors": np.array(log_errors),
+        "forces": np.array(log_forces),
     }
 
+    # Plot telemetry results
+    save_main_plot(logs, filename="main_telemetry.png")
+
     return logs
+
+
+def save_main_plot(logs: Dict[str, np.ndarray], filename: str = "main_telemetry.png") -> None:
+    """Saves telemetry and force diagnostic plot."""
+    import matplotlib.pyplot as plt
+
+    t = logs["time"]
+    forces = logs["forces"]
+    torques = logs["torques"]
+    errors = logs["errors"]
+    ee_pos = logs["ee_pos"]
+
+    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle("Main Controller Telemetry & Force Response", fontsize=14, fontweight="bold")
+
+    # 1. End-effector Position Error
+    axs[0, 0].plot(t, errors * 1000.0, label="Tracking Error (mm)", color="blue", lw=2)
+    axs[0, 0].axvspan(8.0, 9.0, color="orange", alpha=0.3, label="50N Disturbance")
+    axs[0, 0].set_ylabel("Error (mm)")
+    axs[0, 0].set_title("Cartesian EE Tracking Error")
+    axs[0, 0].grid(True)
+    axs[0, 0].legend()
+
+    # 2. Contact & Disturbance Forces
+    axs[0, 1].plot(t, forces[:, 0], label="Fx (N)", color="red")
+    axs[0, 1].plot(t, forces[:, 1], label="Fy (N)", color="green")
+    axs[0, 1].plot(t, forces[:, 2], label="Fz (N)", color="blue")
+    axs[0, 1].axvspan(8.0, 9.0, color="orange", alpha=0.3)
+    axs[0, 1].set_ylabel("Force (N)")
+    axs[0, 1].set_title("End-Effector Interaction & Disturbance Forces")
+    axs[0, 1].grid(True)
+    axs[0, 1].legend()
+
+    # 3. Commanded Joint Torques
+    for j in range(torques.shape[1]):
+        axs[1, 0].plot(t, torques[:, j], label=f"Joint {j+1}")
+    axs[1, 0].axvspan(8.0, 9.0, color="orange", alpha=0.3)
+    axs[1, 0].set_xlabel("Time (s)")
+    axs[1, 0].set_ylabel("Torque (Nm)")
+    axs[1, 0].set_title("Commanded Joint Torques")
+    axs[1, 0].grid(True)
+    axs[1, 0].legend(ncol=4, fontsize=8)
+
+    # 4. 3D Trajectory
+    ax3d = fig.add_subplot(2, 2, 4, projection="3d")
+    ax3d.plot(ee_pos[:, 0], ee_pos[:, 1], ee_pos[:, 2], label="EE Path", color="purple")
+    ax3d.scatter(ee_pos[0, 0], ee_pos[0, 1], ee_pos[0, 2], color="green", s=50, label="Start")
+    ax3d.set_xlabel("X (m)")
+    ax3d.set_ylabel("Y (m)")
+    ax3d.set_zlabel("Z (m)")
+    ax3d.set_title("3D End-Effector Trajectory")
+    ax3d.legend()
+
+    plt.tight_layout()
+    plt.savefig(filename, dpi=150)
+    plt.close()
+    logger.info(f"[Main] Saved telemetry plot to {filename}")
 
 
 def main() -> None:
@@ -153,19 +219,65 @@ def main() -> None:
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     parser = argparse.ArgumentParser(description="Multi-Priority Cartesian Impedance Control (QP) in Genesis")
-    parser.add_argument("--time", type=float, default=5.0, help="Simulation duration in seconds")
+    parser.add_argument("--time", type=float, default=20.0, help="Simulation duration in seconds")
     parser.add_argument("--dt", type=float, default=0.005, help="Simulation timestep in seconds")
     parser.add_argument("--no-vis", action="store_true", help="Run in headless mode without 3D viewer GUI")
     parser.add_argument("--device", type=str, default="gpu", choices=["cpu", "gpu"], help="Physics backend device")
+    parser.add_argument(
+        "--experiment",
+        type=str,
+        default="default",
+        choices=["default", "surface_circle", "blocked_circle", "apf_avoidance", "multilink_push", "torque_wipe", "singularity", "all"],
+        help="Experiment suite selection"
+    )
     args = parser.parse_args()
 
-    run_simulation(
-        sim_time=args.time,
-        dt=args.dt,
-        show_viewer=not args.no_vis,
-        device=args.device
-    )
+    if args.experiment == "surface_circle":
+        from experiments.exp1_surface_circle import run_experiment_1
+        run_experiment_1(sim_time=args.time, dt=args.dt, show_viewer=not args.no_vis, device=args.device)
+    elif args.experiment == "blocked_circle":
+        from experiments.exp2_blocked_circle import run_experiment_2
+        run_experiment_2(sim_time=args.time, dt=args.dt, show_viewer=not args.no_vis, device=args.device)
+    elif args.experiment == "apf_avoidance":
+        from experiments.exp3_apf_avoidance import run_experiment_3
+        run_experiment_3(sim_time=args.time, dt=args.dt, show_viewer=not args.no_vis, device=args.device)
+    elif args.experiment == "multilink_push":
+        from experiments.exp4_multilink_push import run_experiment_4
+        run_experiment_4(sim_time=args.time, dt=args.dt, show_viewer=not args.no_vis, device=args.device)
+    elif args.experiment == "torque_wipe":
+        from experiments.exp5_torque_constrained_wipe import run_experiment_5
+        run_experiment_5(sim_time=args.time, dt=args.dt, show_viewer=not args.no_vis, device=args.device)
+    elif args.experiment == "singularity":
+        from experiments.exp6_singularity_tracking import run_experiment_6
+        run_experiment_6(sim_time=args.time, dt=args.dt, show_viewer=not args.no_vis, device=args.device)
+    elif args.experiment == "all":
+        from experiments.exp1_surface_circle import run_experiment_1
+        from experiments.exp2_blocked_circle import run_experiment_2
+        from experiments.exp3_apf_avoidance import run_experiment_3
+        from experiments.exp4_multilink_push import run_experiment_4
+        from experiments.exp5_torque_constrained_wipe import run_experiment_5
+        from experiments.exp6_singularity_tracking import run_experiment_6
+        logger.info("=== Running Experiment 1: Surface Circle ===")
+        run_experiment_1(sim_time=args.time, dt=args.dt, show_viewer=not args.no_vis, device=args.device)
+        logger.info("=== Running Experiment 2: Blocked Circle ===")
+        run_experiment_2(sim_time=args.time, dt=args.dt, show_viewer=not args.no_vis, device=args.device)
+        logger.info("=== Running Experiment 3: APF Avoidance ===")
+        run_experiment_3(sim_time=args.time, dt=args.dt, show_viewer=not args.no_vis, device=args.device)
+        logger.info("=== Running Experiment 4: Multi-Link Push ===")
+        run_experiment_4(sim_time=args.time, dt=args.dt, show_viewer=not args.no_vis, device=args.device)
+        logger.info("=== Running Experiment 5: Torque Constrained Wiping ===")
+        run_experiment_5(sim_time=args.time, dt=args.dt, show_viewer=not args.no_vis, device=args.device)
+        logger.info("=== Running Experiment 6: Singularity Tracking ===")
+        run_experiment_6(sim_time=args.time, dt=args.dt, show_viewer=not args.no_vis, device=args.device)
+    else:
+        run_simulation(
+            sim_time=args.time,
+            dt=args.dt,
+            show_viewer=not args.no_vis,
+            device=args.device
+        )
 
 
 if __name__ == "__main__":
     main()
+

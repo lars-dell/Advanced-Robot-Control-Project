@@ -141,5 +141,8 @@ class CasADiQPSolver:
                 res = solver_fn(H, g, lb, ub)
             return np.array(res, dtype=np.float64).flatten()
         except Exception as e:
+            if eq_dim > 0:
+                # Fallback to bound-constrained QP when higher-level equality constraints conflict with tight torque bounds
+                return self.solve(H, g, lb, ub)
             logger.error(f"Pre-compiled QP solver evaluation failed for eq_dim={eq_dim}: {e}")
             return np.zeros(self.n_vars, dtype=np.float64)

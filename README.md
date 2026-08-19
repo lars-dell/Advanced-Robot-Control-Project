@@ -125,14 +125,14 @@ source .venv/bin/activate
 Run the control simulation with interactive 3D rendering or headless:
 
 ```bash
-# Run simulation with 3D GUI viewer (default: 5.0 seconds on GPU backend)
+# Run simulation with 3D GUI viewer (default: 20.0 seconds on GPU backend)
 uv run python main.py
 
 # Run headless simulation (no visualizer window)
 uv run python main.py --no-vis
 
-# Run simulation on CPU backend for 10 seconds
-uv run python main.py --device cpu --time 10.0
+# Run simulation on CPU backend for 25 seconds
+uv run python main.py --device cpu --time 25.0
 ```
 
 ### CLI Command Line Arguments for `main.py`
@@ -152,4 +152,4 @@ During simulation, `main.py` logs operational telemetry to the console:
 - **End-Effector Tracking Error Norm ($[m]$)**
 - **Maximum Commanded Joint Torque ($\max |\tau| \, [\text{N}\cdot\text{m}]$)**
 
-Between $t=2.0\text{s}$ and $t=2.2\text{s}$, an external 3D force perturbation ($[10, 0, 0]\,\text{N}$) is applied to the end-effector link to demonstrate compliant interaction and robust trajectory recovery under joint-torque constraints.
+Between $t=8.0\text{s}$ and $t=9.0\text{s}$, an external 3D force perturbation ($[10, 0, 0]\,\text{N}$) is applied to the end-effector link to demonstrate compliant interaction and robust trajectory recovery under joint-torque constraints.

@@ -162,15 +162,16 @@ class QPImpedanceController(BaseController):
             R_des = target.get("rot", R_curr)
             v_des = target.get("vel", np.zeros(6 if state["J"].shape[0] == 6 else 3))
 
-            is_6d = (state["J"].shape[0] == 6)
+            mode = "6d" if state["J"].shape[0] == 6 else "3d"
             cart_task = CartesianPoseTask(
                 name="cartesian_primary",
                 priority=0,
                 kp=self.kp_cart,
                 kd=self.kd_cart,
-                is_6d=is_6d,
+                mode=mode,
                 use_full_impedance=target.get("use_full_impedance", False)
             )
+
 
             q_null_des = target.get("q_null", np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785]))
             posture_task = JointPostureTask(
@@ -219,11 +220,18 @@ class QPImpedanceController(BaseController):
 
             else:
                 # Level 1+ QP: Secondary Task subject to Strict Priority Equality Constraints
-                H_i = (1.0 + self.reg_eps) * np.eye(n_dofs)
-                g_i = - f_i  # f_i is posture torque tau_null for JointPostureTask
+                if J_i.shape[0] == n_dofs:
+                    # Joint space task (e.g. posture stiffness task)
+                    H_i = (1.0 + self.reg_eps) * np.eye(n_dofs)
+                    g_i = - np.asarray(f_i, dtype=np.float64).flatten()
+                else:
+                    # Operational space task (e.g. Cartesian tracking task)
+                    target_force_proj = M_i @ J_i.T @ f_i
+                    H_i = M_i.T @ M_i + self.reg_eps * np.eye(n_dofs)
+                    g_i = - (M_i.T @ target_force_proj).flatten()
 
                 A_eq = np.vstack(prev_A_eq_list)
-                b_eq = np.concatenate(prev_b_eq_list)
+                b_eq = np.concatenate(prev_b_eq_list).flatten()
 
                 tau_opt = self.qp_solver.solve(
                     H=H_i,
@@ -234,9 +242,11 @@ class QPImpedanceController(BaseController):
                     b_eq=b_eq
                 )
 
-                # Update equality constraints list for higher levels if any
-                prev_A_eq_list.append(M_i)
-                prev_b_eq_list.append(M_i @ tau_opt)
+
+                # Update equality constraints list for subsequent priority levels if any
+                if level < len(evaluated_tasks) - 1 and J_i.shape[0] < n_dofs:
+                    prev_A_eq_list.append(M_i)
+                    prev_b_eq_list.append(M_i @ tau_opt)
 
         # Final total joint torque command: tau_cmd = tau_opt + h(q, dq)
         tau_cmd = tau_opt + h
