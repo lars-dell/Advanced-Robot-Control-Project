@@ -20,9 +20,9 @@ class CartesianPoseTask(BaseTask):
         priority: int = 0,
         kp: float = 400.0,
         kd: float = 40.0,
-        is_6d: bool = False,
+        mode: str = "3d",
         use_full_impedance: bool = False,
-        trajectory_fn: Optional[Callable[[float], Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]]] = None
+        trajectory_fn: Optional[Callable[[float], Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]]] = None,
     ) -> None:
         """
         Initialize Cartesian Pose Task.
@@ -32,16 +32,28 @@ class CartesianPoseTask(BaseTask):
             priority: Priority level index (0 = highest priority).
             kp: Proportional stiffness gain.
             kd: Derivative damping gain.
-            is_6d: Whether to control 6D pose (True) or 3D position (False).
+            mode: Task control dimension ('3d', '6d', 'xy', 'z').
             use_full_impedance: If True, uses Lambda mass matrix weighting; if False, uses VMC.
             trajectory_fn: Optional dynamic reference function t -> (pos_des, rot_des, vel_des).
         """
         super().__init__(name=name, priority=priority)
         self.kp = kp
         self.kd = kd
-        self.is_6d = is_6d
+        self.mode = mode
         self.use_full_impedance = use_full_impedance
         self.trajectory_fn = trajectory_fn
+
+
+    @property
+    def dim(self) -> int:
+        """Returns the task dimension corresponding to self.mode."""
+        if self.mode == "6d":
+            return 6
+        elif self.mode == "xy":
+            return 2
+        elif self.mode == "z":
+            return 1
+        return 3
 
     def compute(self, state: Dict[str, np.ndarray], t: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -67,19 +79,31 @@ class CartesianPoseTask(BaseTask):
         else:
             p_des = state.get("target_pos", p_curr)
             R_des = state.get("target_rot", R_curr)
-            v_des = state.get("target_vel", np.zeros(6 if self.is_6d else 3))
+            v_des = state.get("target_vel", np.zeros(self.dim))
 
         if R_des is None:
             R_des = R_curr
         if v_des is None:
-            v_des = np.zeros(6 if self.is_6d else 3)
+            v_des = np.zeros(self.dim)
 
-        if self.is_6d:
+        if self.mode == "6d":
             J_task = J_full  # (6, n_dofs)
             e_pos = p_des - p_curr
             e_rot = compute_orientation_error(R_curr, R_des)
             e_task = np.concatenate([e_pos, e_rot])
             v_curr = J_task @ dq
+        elif self.mode == "xy":
+            J_task = J_full[:2, :]  # (2, n_dofs)
+            e_task = (p_des - p_curr)[:2]
+            v_curr = J_task @ dq
+            if len(v_des) >= 2:
+                v_des = v_des[:2]
+        elif self.mode == "z":
+            J_task = J_full[2:3, :]  # (1, n_dofs)
+            e_task = (p_des - p_curr)[2:3]
+            v_curr = J_task @ dq
+            if len(v_des) >= 3:
+                v_des = v_des[2:3]
         else:
             J_task = J_full[:3, :]  # (3, n_dofs)
             e_task = p_des - p_curr
@@ -96,9 +120,10 @@ class CartesianPoseTask(BaseTask):
             reg = 1e-4 * np.eye(Lambda_inv.shape[0])
             Lambda = np.linalg.inv(Lambda_inv + reg)
             
-            # Acceleration feedforward (default to zero if unmodeled)
+            # Operational space acceleration feedforward and velocity drift compensation
             acc_des = state.get("target_acc", np.zeros(J_task.shape[0]))
-            f_cart = Lambda @ acc_des + self.kp * e_task + self.kd * v_err
+            dJ_dq = state.get("dJ_dq", np.zeros(J_task.shape[0]))
+            f_cart = Lambda @ (acc_des - dJ_dq) + self.kp * e_task + self.kd * v_err
         else:
             # Virtual Model Control (VMC) / Spring-Damper Law
             f_cart = self.kp * e_task + self.kd * v_err
@@ -107,8 +132,13 @@ class CartesianPoseTask(BaseTask):
 
     def compute_error(self, state: Dict[str, np.ndarray]) -> float:
         """
-        Computes positional tracking error norm.
+        Computes tracking error norm matching the task mode dimension.
         """
         p_curr = state["ee_pos"]
         p_des = state.get("target_pos", p_curr)
+        if self.mode == "xy":
+            return float(np.linalg.norm((p_des - p_curr)[:2]))
+        elif self.mode == "z":
+            return float(abs(p_des[2] - p_curr[2]))
         return float(np.linalg.norm(p_des - p_curr))
+
