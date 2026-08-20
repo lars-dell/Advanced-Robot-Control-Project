@@ -5,11 +5,52 @@ Handles scene setup, robot loading (panda_cylinder.xml), physics stepping, exter
 and state variable extraction with automatic PyTorch tensor to NumPy array conversion for CasADi compatibility.
 """
 
-from typing import Dict, Optional, Tuple, Any
+from typing import Dict, Optional, Tuple, Any, List
+from collections import deque
 import os
+import pathlib
+import tempfile
 import numpy as np
 import torch
 import genesis as gs
+import mujoco
+
+
+def resolve_model(model_xml: str) -> str:
+    """
+    Resolve an MJCF path to one whose meshes actually exist.
+
+    `panda_cylinder.xml` declares meshdir="assets", but this repository ships no assets/ directory
+    (the Panda meshes are ~31 MB and are deliberately not vendored). Genesis installs them with the
+    package, so if there is no local assets/ we rewrite meshdir to point at the installed copy and
+    hand Genesis the patched file.
+
+    Raises instead of falling back to a different robot: silently swapping models produces results
+    for a machine nobody chose.
+    """
+    src = pathlib.Path(model_xml)
+    if not src.is_file():
+        # Not a local file: assume it is a Genesis built-in asset path and let Genesis resolve it.
+        return model_xml
+
+    text = src.read_text()
+    if 'meshdir="assets"' not in text:
+        return str(src.resolve())
+
+    if (src.parent / "assets").is_dir():
+        return str(src.resolve())  # vendored meshes present, nothing to do
+
+    bundled = pathlib.Path(gs.__file__).parent / "assets" / "xml" / "franka_emika_panda" / "assets"
+    if not bundled.is_dir():
+        raise FileNotFoundError(
+            f"{src} needs meshes in '{src.parent / 'assets'}' but that directory does not exist, "
+            f"and the Genesis-bundled copy was not found at '{bundled}' either. "
+            f"Vendor the meshes into ./assets/ or reinstall genesis-world."
+        )
+
+    patched = pathlib.Path(tempfile.gettempdir()) / f"{src.stem}_resolved.xml"
+    patched.write_text(text.replace('meshdir="assets"', f'meshdir="{bundled}"'))
+    return str(patched)
 
 
 def _tensor_to_numpy(x: Any) -> np.ndarray:
@@ -44,7 +85,9 @@ class GenesisSim:
         model_xml: str = "panda_cylinder.xml",
         show_viewer: bool = True,
         dt: float = 0.005,
-        device: str = "cpu"
+        device: str = "cpu",
+        ee_link_name: str = "tool_tip",
+        show_markers: bool = True
     ) -> None:
         """
         Initialize the Genesis simulation wrapper.
@@ -56,6 +99,7 @@ class GenesisSim:
             device: Computing backend device ('cpu' or 'gpu').
         """
         self.model_xml = model_xml
+        self.ee_link_name = ee_link_name
         self.show_viewer = show_viewer
         self.dt = dt
         self.device = device
@@ -66,6 +110,26 @@ class GenesisSim:
         self.plane: Optional[gs.Entity] = None
 
         self._arm_dof_dim = 7
+        self._f_ext = np.zeros(3, dtype=np.float64)  # pending external disturbance, world frame
+
+        # ---- Visualization -------------------------------------------------------------------
+        # Markers are viewer-only: the goal is a massless, collision-free entity, everything else
+        # is debug-draw overlay. None of it touches the physics.
+        self.show_markers = show_markers
+        self._viz_every = 5          # redraw every Nth control step (dt=0.005 -> 40 Hz)
+        self._trail_every = 10       # sample the tip trail every Nth step
+        self._trail_max = 300        # breadcrumbs retained
+        self._arrow_scale = 0.02     # metres of arrow per newton of disturbance
+        self._viz_step = 0
+        self._trail: deque = deque(maxlen=self._trail_max)
+        self._dbg_line = None
+        self._dbg_arrow = None
+        self._dbg_trail = None
+        self.goal_marker = None
+
+        # Panda joint torque limits (MJCF forcerange); these are tau_min/tau_max for the QP.
+        self.tau_min = np.array([-87.0, -87.0, -87.0, -87.0, -12.0, -12.0, -12.0])
+        self.tau_max = np.array([87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0])
 
         # Initialize environment
         self.setup_environment()
@@ -106,37 +170,71 @@ class GenesisSim:
         # Add ground plane entity
         self.plane = self.scene.add_entity(gs.morphs.Plane())
 
-        # Resolve robot XML file path
-        if os.path.exists(self.model_xml):
-            xml_file = os.path.abspath(self.model_xml)
-        else:
-            # Pass as relative path string for Genesis built-in asset resolution (e.g. 'xml/franka_emika_panda/panda.xml')
-            xml_file = self.model_xml
-
-        # Load robot entity from MJCF
-        try:
-            self.robot = self.scene.add_entity(
-                gs.morphs.MJCF(
-                    file=xml_file,
-                    pos=(0.0, 0.0, 0.0),
-                    quat=(1.0, 0.0, 0.0, 0.0)
-                )
+        # Resolve robot XML so its meshes are findable, then load. No fallback: a missing model
+        # must fail loudly rather than silently substituting a different robot.
+        self._resolved_xml = resolve_model(self.model_xml)
+        self.robot = self.scene.add_entity(
+            gs.morphs.MJCF(
+                file=self._resolved_xml,
+                pos=(0.0, 0.0, 0.0),
+                quat=(1.0, 0.0, 0.0, 0.0)
             )
-        except Exception:
-            # Fallback to Genesis built-in Franka model if custom XML assets are missing
-            self.robot = self.scene.add_entity(
-                gs.morphs.MJCF(
-                    file="xml/franka_emika_panda/panda.xml",
-                    pos=(0.0, 0.0, 0.0),
-                    quat=(1.0, 0.0, 0.0, 0.0)
-                )
+        )
+
+        # Goal marker: emissive, massless, collision-free. Added after the robot so the robot's
+        # link indices are untouched, and before build() as Genesis requires.
+        # Gated on the viewer too: with no viewer the entity is invisible but still costs scene
+        # setup time (~17% on a headless run). If offscreen camera rendering is added later, this
+        # condition must widen to include that case.
+        if self.show_markers and self.show_viewer:
+            self.goal_marker = self.scene.add_entity(
+                gs.morphs.Sphere(
+                    radius=0.02,
+                    fixed=True,
+                    collision=False,
+                    batch_fixed_verts=True,
+                ),
+                surface=gs.surfaces.Emission(color=(0.0, 1.0, 0.0)),
             )
 
         # Build simulation scene
         self.scene.build(n_envs=self.n_envs)
 
-        # Retrieve EE link handle
-        self.ee_link = self.robot.get_link("hand") if "hand" in [l.name for l in self.robot.links] else self.robot.links[-1]
+        # ---- Torque-control setup -------------------------------------------------------------
+        # Genesis imports the MJCF <general> actuator gains (kp up to 4500, kv up to 450), which is
+        # a position servo. Left active it overwhelms any commanded torque, so it must be zeroed.
+        zeros = torch.zeros(self.robot.n_dofs, dtype=gs.tc_float, device=gs.device)
+        self.robot.set_dofs_kp(zeros)
+        self.robot.set_dofs_kv(zeros)
+        self.robot.set_dofs_force_range(
+            torch.tensor(self.tau_min, dtype=gs.tc_float, device=gs.device),
+            torch.tensor(self.tau_max, dtype=gs.tc_float, device=gs.device),
+        )
+
+        # ---- End-effector link ----------------------------------------------------------------
+        link_names = [l.name for l in self.robot.links]
+        if self.ee_link_name not in link_names:
+            raise ValueError(
+                f"end-effector link {self.ee_link_name!r} not present in model "
+                f"{self.model_xml!r}. Available links: {link_names}"
+            )
+        self.ee_link = self.robot.get_link(self.ee_link_name)
+
+        # ---- Shadow MuJoCo model for the dynamic bias term ------------------------------------
+        # Genesis exposes no gravity or inverse-dynamics call, so h(q,dq) = C(q,dq)dq + g(q) is
+        # taken from a MuJoCo model built from the same XML. mujoco ships as a Genesis dependency.
+        self._mj_model = mujoco.MjModel.from_xml_path(self._resolved_xml)
+        self._mj_data = mujoco.MjData(self._mj_model)
+        if self._mj_model.nv < self._arm_dof_dim:
+            raise RuntimeError(
+                f"shadow MuJoCo model has nv={self._mj_model.nv}, expected at least "
+                f"{self._arm_dof_dim}; it does not match the Genesis model."
+            )
+        self._mj_ee_body = mujoco.mj_name2id(
+            self._mj_model, mujoco.mjtObj.mjOBJ_BODY, self.ee_link_name
+        )
+        if self._mj_ee_body < 0:
+            raise RuntimeError(f"body {self.ee_link_name!r} not found in the shadow MuJoCo model")
 
         # Reset home position
         self.reset()
@@ -152,10 +250,10 @@ class GenesisSim:
 
         q_tensor = torch.tensor([default_q], dtype=gs.tc_float, device=gs.device)
         self.robot.set_qpos(q_tensor)
-
-        # Step simulation to let state update
-        for _ in range(10):
-            self.scene.step()
+        self.robot.zero_all_dofs_velocity()
+        self._f_ext[:] = 0.0
+        # No settling steps: with the internal PD zeroed and no torque commanded yet, stepping here
+        # would just let the arm fall. set_qpos already refreshes the kinematics.
 
     def step(self) -> None:
         """
@@ -175,6 +273,7 @@ class GenesisSim:
                 - "B": Joint-space mass matrix of shape (7, 7)
                 - "ee_pos": End-effector 3D position of shape (3,)
                 - "ee_rot": End-effector 3x3 rotation matrix of shape (3, 3)
+                - "h": Dynamic bias C(q, dq) * dq + g(q) of shape (7,)
         """
         # Joint positions and velocities (extract arm DOFs)
         q_raw = self.robot.get_dofs_position()
@@ -191,24 +290,23 @@ class GenesisSim:
         J_raw = self.robot.get_jacobian(link=self.ee_link)
         J_np = _tensor_to_numpy(J_raw)[:, :self._arm_dof_dim]  # (6, 7)
 
-        # End-effector position and orientation matrix
-        ee_pos_raw = self.ee_link.get_pos()
-        ee_quat_raw = self.ee_link.get_quat()  # (w, x, y, z) or (x, y, z, w)
+        # End-effector position from Genesis
+        ee_pos_np = _tensor_to_numpy(self.ee_link.get_pos())
 
-        ee_pos_np = _tensor_to_numpy(ee_pos_raw)
-        
-        # Convert quaternion to rotation matrix
-        ee_quat_np = _tensor_to_numpy(ee_quat_raw)
-        ee_rot_np = _tensor_to_numpy(gs.utils.geom.quat_to_R(ee_quat_np))
+        # ---- Shadow MuJoCo: dynamic bias term and EE orientation ------------------------------
+        # Sync the shadow model to the Genesis state, then read what Genesis does not expose.
+        self._mj_data.qpos[:self._arm_dof_dim] = q_np
+        self._mj_data.qvel[:self._arm_dof_dim] = dq_np
+        mujoco.mj_forward(self._mj_model, self._mj_data)
 
-        # Dynamic bias vector h(q, dq) = C(q, dq) * dq + g(q) if available
-        h_np = np.zeros(self._arm_dof_dim, dtype=np.float64)
-        if hasattr(self.robot, "get_gravity_force"):
-            try:
-                g_raw = self.robot.get_gravity_force()
-                h_np = _tensor_to_numpy(g_raw)[:self._arm_dof_dim]
-            except Exception:
-                pass
+        # h(q, dq) = C(q, dq) * dq + g(q), exactly. Genesis has no equivalent call.
+        h_np = np.asarray(self._mj_data.qfrc_bias[:self._arm_dof_dim], dtype=np.float64).copy()
+
+        # Rotation matrix straight from MuJoCo's xmat, which sidesteps the unresolved question of
+        # whether Genesis get_quat() is (w,x,y,z) or (x,y,z,w).
+        ee_rot_np = np.asarray(
+            self._mj_data.xmat[self._mj_ee_body], dtype=np.float64
+        ).reshape(3, 3).copy()
 
         return {
             "q": q_np,
@@ -227,10 +325,16 @@ class GenesisSim:
         Args:
             torques: Joint torque array of shape (7,) or matching n_dofs.
         """
-        torques_flat = np.asarray(torques, dtype=np.float32).flatten()
+        torques_flat = np.asarray(torques, dtype=np.float64).flatten()
 
-        full_torques = np.zeros(self.robot.n_dofs, dtype=np.float32)
+        full_torques = np.zeros(self.robot.n_dofs, dtype=np.float64)
         full_torques[:self._arm_dof_dim] = torques_flat[:self._arm_dof_dim]
+
+        # External disturbance. Genesis links expose no apply_force(), so a Cartesian push is
+        # injected as its equivalent joint torque, tau_ext = J_lin^T f_ext.
+        if np.any(self._f_ext):
+            J_lin = _tensor_to_numpy(self.robot.get_jacobian(link=self.ee_link))[:3, :self._arm_dof_dim]
+            full_torques[:self._arm_dof_dim] += J_lin.T @ self._f_ext
 
         # Convert to PyTorch tensor for Genesis
         tau_tensor = torch.tensor(full_torques, dtype=gs.tc_float, device=gs.device).unsqueeze(0)
@@ -238,20 +342,106 @@ class GenesisSim:
         # Apply joint forces in Genesis
         self.robot.control_dofs_force(tau_tensor)
 
-    def apply_external_disturbance(
-        self,
-        force: np.ndarray,
-        link_name: str = "hand"
-    ) -> None:
+    def set_external_force(self, force: np.ndarray) -> None:
         """
-        Applies external disturbance force vector to a specific link of the robot.
+        Set a persistent external disturbance force applied at the end-effector.
+
+        Genesis links have no apply_force() member, so the force is realised on the next
+        apply_torques() call as the equivalent joint torque J_lin^T f_ext. Pass zeros to clear.
 
         Args:
-            force: 3D force vector [Fx, Fy, Fz] in Newtons.
-            link_name: Target link name (default: 'hand').
+            force: 3D force vector [Fx, Fy, Fz] in Newtons, world frame.
         """
-        link = self.robot.get_link(link_name)
-        if link is not None and hasattr(link, "apply_force"):
-            f_tensor = torch.tensor(force, dtype=gs.tc_float, device=gs.device)
-            link.apply_force(f_tensor)
+        self._f_ext = np.asarray(force, dtype=np.float64).reshape(3).copy()
 
+    # ---------------------------------------------------------------------- #
+    #                              Visualization                             #
+    # ---------------------------------------------------------------------- #
+
+    def _viz_active(self) -> bool:
+        """Markers are pure cost when there is no viewer to show them in."""
+        return bool(self.show_markers and self.show_viewer)
+
+    def set_goal(self, pos: np.ndarray) -> None:
+        """
+        Place the goal marker at a Cartesian target.
+
+        Args:
+            pos: Desired end-effector position [x, y, z] in world frame.
+        """
+        if self.goal_marker is None:
+            return
+        p = np.asarray(pos, dtype=np.float64).reshape(3)
+        self.goal_marker.set_pos(
+            torch.tensor(p[None, :], dtype=gs.tc_float, device=gs.device)
+        )
+
+    def update_viz(self, tip_pos: np.ndarray, goal_pos: np.ndarray) -> None:
+        """
+        Redraw the transient debug overlays: tip-to-goal error line, disturbance arrow, tip trail.
+
+        Throttled to every `_viz_every` calls; each debug draw takes the visualizer lock, so doing
+        this at the full control rate measurably slows the simulation. The pending external force
+        is read from internal state, so callers do not have to pass it twice.
+
+        Args:
+            tip_pos:  Current end-effector position (3,).
+            goal_pos: Current Cartesian target (3,).
+        """
+        if not self._viz_active():
+            return
+
+        self._viz_step += 1
+        tip = np.asarray(tip_pos, dtype=np.float64).reshape(3)
+
+        if self._viz_step % self._trail_every == 0:
+            self._trail.append(tip.copy())
+
+        if self._viz_step % self._viz_every != 0:
+            return
+
+        goal = np.asarray(goal_pos, dtype=np.float64).reshape(3)
+
+        # --- error line: its length IS the tracking error --------------------------------------
+        if self._dbg_line is not None:
+            self.scene.clear_debug_object(self._dbg_line)
+            self._dbg_line = None
+        if np.linalg.norm(goal - tip) > 1e-4:
+            self._dbg_line = self.scene.draw_debug_line(
+                start=tip, end=goal, radius=0.004, color=(1.0, 0.75, 0.1, 0.9)
+            )
+
+        # --- disturbance arrow: only while a push is actually being applied ---------------------
+        if self._dbg_arrow is not None:
+            self.scene.clear_debug_object(self._dbg_arrow)
+            self._dbg_arrow = None
+        if np.any(self._f_ext):
+            self._dbg_arrow = self.scene.draw_debug_arrow(
+                pos=tip,
+                vec=self._f_ext * self._arrow_scale,
+                radius=0.008,
+                color=(1.0, 0.15, 0.15, 1.0),
+            )
+
+        # --- trail: cyan breadcrumbs, older points more transparent -----------------------------
+        if self._dbg_trail is not None:
+            self.scene.clear_debug_object(self._dbg_trail)
+            self._dbg_trail = None
+        if len(self._trail) >= 2:
+            poss = np.asarray(self._trail, dtype=np.float64)
+            alpha = np.linspace(0.15, 0.9, len(poss))
+            colors = np.column_stack([
+                np.full(len(poss), 0.1),
+                np.full(len(poss), 0.85),
+                np.full(len(poss), 0.95),
+                alpha,
+            ])
+            self._dbg_trail = self.scene.draw_debug_points(poss=poss, colors=colors)
+
+    def clear_viz(self) -> None:
+        """Remove all debug overlays this object owns and forget the trail."""
+        for handle in (self._dbg_line, self._dbg_arrow, self._dbg_trail):
+            if handle is not None:
+                self.scene.clear_debug_object(handle)
+        self._dbg_line = self._dbg_arrow = self._dbg_trail = None
+        self._trail.clear()

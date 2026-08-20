@@ -8,7 +8,7 @@ and handles telemetry data logging.
 
 import argparse
 import logging
-import time
+import pathlib
 from typing import Dict, List
 import numpy as np
 
@@ -23,7 +23,9 @@ def run_simulation(
     sim_time: float = 5.0,
     dt: float = 0.005,
     show_viewer: bool = True,
-    device: str = "gpu"
+    device: str = "cpu",
+    out_path: str = "results/run.npz",
+    show_markers: bool = True
 ) -> Dict[str, np.ndarray]:
     """
     Executes the main control simulation loop using the modular task stack and paper-compliant QP controller.
@@ -33,6 +35,8 @@ def run_simulation(
         dt: Control timestep in seconds (default: 0.005s / 200 Hz).
         show_viewer: Whether to launch interactive 3D Genesis viewer.
         device: Computing backend ('cpu' or 'gpu').
+        out_path: Destination .npz for the telemetry log.
+        show_markers: Draw the goal sphere, error line, disturbance arrow and tip trail.
 
     Returns:
         Dict[str, np.ndarray]: Recorded log data arrays for analysis and plotting.
@@ -42,7 +46,8 @@ def run_simulation(
         model_xml="panda_cylinder.xml",
         show_viewer=show_viewer,
         dt=dt,
-        device=device
+        device=device,
+        show_markers=show_markers
     )
 
     logger.info("[Main] Instantiating Hierarchical QP Impedance Controller (CasADi / qpOASES)...")
@@ -64,6 +69,9 @@ def run_simulation(
     target_ee_pos = initial_ee_pos + np.array([0.15, 0.10, -0.05])
     target_ee_rot = initial_state["ee_rot"].copy()
     target_q_null = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785])
+
+    # Show where the primary Cartesian task is aiming.
+    sim.set_goal(target_ee_pos)
 
     # Construct modular task stack hierarchy
     task_stack = TaskStack()
@@ -114,12 +122,17 @@ def run_simulation(
         # Apply torques to robot joints
         sim.apply_torques(torques)
 
-        # Optional: Apply disturbance force halfway through simulation
-        if 2.0 <= t_curr <= 2.2:
-            sim.apply_external_disturbance(force=np.array([10.0, 0.0, 0.0]), link_name="hand")
+        # Optional: external disturbance applied to the end-effector for a 0.2 s window.
+        # Genesis links have no apply_force(); GenesisSim injects this as J^T f_ext.
+        sim.set_external_force(
+            np.array([10.0, 0.0, 0.0]) if 2.0 <= t_curr <= 2.2 else np.zeros(3)
+        )
 
         # Step physics simulation engine
         sim.step()
+
+        # Refresh viewer overlays (no-op when headless; internally throttled)
+        sim.update_viz(tip_pos=state["ee_pos"], goal_pos=target_ee_pos)
 
         # Log telemetry data
         log_time.append(t_curr)
@@ -142,7 +155,14 @@ def run_simulation(
         "ee_pos_des": np.array(log_ee_pos_des),
         "torques": np.array(log_torques),
         "errors": np.array(log_errors),
+        "tau_min": sim.tau_min,
+        "tau_max": sim.tau_max,
     }
+
+    out = pathlib.Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(out, **logs)
+    logger.info(f"[Main] Logs written to {out} ({len(logs['time'])} steps)")
 
     return logs
 
@@ -156,15 +176,25 @@ def main() -> None:
     parser.add_argument("--time", type=float, default=5.0, help="Simulation duration in seconds")
     parser.add_argument("--dt", type=float, default=0.005, help="Simulation timestep in seconds")
     parser.add_argument("--no-vis", action="store_true", help="Run in headless mode without 3D viewer GUI")
-    parser.add_argument("--device", type=str, default="gpu", choices=["cpu", "gpu"], help="Physics backend device")
+    parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "gpu"], help="Physics backend device")
+    parser.add_argument("--out", type=str, default="results/run.npz", help="Where to write the telemetry .npz")
+    parser.add_argument("--no-markers", action="store_true", help="Disable goal/error/trail overlays")
     args = parser.parse_args()
 
-    run_simulation(
+    logs = run_simulation(
         sim_time=args.time,
         dt=args.dt,
         show_viewer=not args.no_vis,
-        device=args.device
+        device=args.device,
+        out_path=args.out,
+        show_markers=not args.no_markers
     )
+
+    tau = logs["torques"]
+    over = np.abs(tau) > (np.maximum(np.abs(logs["tau_min"]), logs["tau_max"]) + 1e-9)
+    logger.info(f"[Main] final EE error {logs['errors'][-1]:.4f} m | "
+                f"max |tau| {np.abs(tau).max():.2f} Nm | "
+                f"torque-limit violations: {int(over.sum())}")
 
 
 if __name__ == "__main__":
