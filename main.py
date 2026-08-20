@@ -157,6 +157,10 @@ def run_simulation(
         "errors": np.array(log_errors),
         "tau_min": sim.tau_min,
         "tau_max": sim.tau_max,
+        # Feasibility evidence: the paper guarantees these stay at zero without any clipping.
+        "n_violations": controller.n_violations,
+        "n_solves": controller.n_solves,
+        "max_violation": controller.max_violation,
     }
 
     out = pathlib.Path(out_path)
@@ -191,10 +195,10 @@ def main() -> None:
     )
 
     tau = logs["torques"]
-    over = np.abs(tau) > (np.maximum(np.abs(logs["tau_min"]), logs["tau_max"]) + 1e-9)
     logger.info(f"[Main] final EE error {logs['errors'][-1]:.4f} m | "
                 f"max |tau| {np.abs(tau).max():.2f} Nm | "
-                f"torque-limit violations: {int(over.sum())}")
+                f"torque-limit violations: {logs['n_violations']}/{logs['n_solves']} steps "
+                f"(worst {logs['max_violation']:.2e} Nm)")
 
 
 if __name__ == "__main__":

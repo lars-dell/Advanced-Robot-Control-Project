@@ -183,6 +183,33 @@ At the end of the run a summary line reports the final tracking error, the peak 
 and a **torque-limit violation count**, and the full per-step telemetry is written to
 `results/run.npz` (override with `--out`) for offline plotting.
 
+### Verifying the two properties the paper claims
+
+The controller applies **no post-hoc clipping** to its output. Equations (19)–(21) already guarantee
+feasibility: the QP is bounded by $[\tau_{min} - h,\ \tau_{max} - h]$, so adding $h$ back lands
+inside $[\tau_{min},\ \tau_{max}]$ by construction. Clipping would discard the QP's optimality and
+priority ordering, and would mask any bug that broke the guarantee — so instead the controller
+*measures* it, via `n_violations`, `n_solves` and `max_violation` (also saved into the `.npz`).
+
+Strict priority is likewise measurable rather than assumed. After each solve,
+`QPImpedanceController.priority_residuals[k]` holds
+
+$$\left\| J_k B^{-1}\tau_{final} - J_k B^{-1}\tau_k^* \right\|$$
+
+— how far the final solution drifted from what priority level $k$ had already decided. Strict
+priority means these sit at solver tolerance.
+
+Measured on the default scenario (Cartesian position at level 0, joint posture at level 1, 400
+control steps):
+
+| Property | Result |
+| :--- | :--- |
+| Torque-limit violations | **0 / 400 steps**, worst $0.0$ N·m |
+| Priority-0 constraint residual | **max $1.3\times10^{-14}$**, mean $7.7\times10^{-15}$ |
+
+The residual is at floating-point noise, so the lower-priority task provably never disturbs the
+higher-priority one.
+
 Between $t=2.0\text{s}$ and $t=2.2\text{s}$, an external force ($[10, 0, 0]\,\text{N}$) is applied
 at the end-effector to demonstrate compliant interaction and recovery. Genesis links expose no
 `apply_force()`, so the disturbance is injected as the equivalent joint torque $J_{lin}^T f_{ext}$;

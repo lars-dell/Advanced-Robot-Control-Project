@@ -76,6 +76,18 @@ class QPImpedanceController(BaseController):
         self.use_qpoases = use_qpoases
         self.reg_eps = reg_eps
 
+        # Feasibility accounting. The paper guarantees tau_cmd stays inside [tau_min, tau_max]
+        # without post-hoc clipping; these counters are the evidence for that claim.
+        self.violation_tol = 1e-6
+        # Per-level diagnostics, refreshed each compute_torques() call. priority_residuals[k] is
+        # || J_k B^-1 tau_final - J_k B^-1 tau_k* ||: how far the final solution drifted from what
+        # priority level k had already decided. Strict priority means these sit at solver tolerance.
+        self.level_torques: list = []
+        self.priority_residuals: list = []
+        self.n_violations = 0
+        self.n_solves = 0
+        self.max_violation = 0.0
+
         # Instantiate pre-compiled parametric CasADi QP solver module
         self.qp_solver = CasADiQPSolver(n_vars=self.n_dofs, use_qpoases=self.use_qpoases)
 
@@ -144,9 +156,18 @@ class QPImpedanceController(BaseController):
         # Extract dynamic bias vector h(q, dq) = C(q, dq)*dq + g(q)
         h = state.get("h", np.zeros(n_dofs, dtype=np.float64))
 
-        # Dynamic bounds compensation: tau_min - h <= tau <= tau_max - h
+        # Dynamic bounds compensation (eq. 21): tau_min - h <= tau <= tau_max - h
         lb = self.tau_min - h
         ub = self.tau_max - h
+
+        # If the feed-forward alone exceeds a joint's limit the box is empty and the QP is
+        # infeasible. Collapse that joint's bounds to the achievable value rather than handing the
+        # solver an impossible problem, and let the violation counter record the consequence.
+        crossed = lb > ub
+        if np.any(crossed):
+            mid = 0.5 * (lb[crossed] + ub[crossed])
+            lb[crossed] = mid
+            ub[crossed] = mid
 
         # Inverse of inertia matrix B
         B_inv = np.linalg.inv(B)
@@ -194,54 +215,64 @@ class QPImpedanceController(BaseController):
         # Process Cascade QPs across priority levels
         prev_A_eq_list = []
         prev_b_eq_list = []
+        level_torques: list = []
         tau_opt = np.zeros(n_dofs, dtype=np.float64)
 
         for level, (task, J_i, f_i) in enumerate(evaluated_tasks):
-            # Compute mapping matrix M_i = J_i * B^(-1)
-            M_i = J_i @ B_inv  # (m_i, n_dofs)
+            # Mapping matrix M_i = J_i * B^(-1), shape (m_i, n_dofs)
+            M_i = J_i @ B_inv
 
-            if level == 0:
-                # Level 0 QP: Primary Cartesian Task Optimization
-                target_force_proj = M_i @ J_i.T @ f_i  # (m_i,)
-                H0 = M_i.T @ M_i + self.reg_eps * np.eye(n_dofs)
-                g0 = - M_i.T @ target_force_proj
+            # Equation (18), applied identically at every priority level:
+            #     min_tau || M_i tau - M_i J_i^T f_i ||^2 + eps ||tau||^2
+            # Expanded to the QP's 1/2 tau^T H tau + g^T tau form.
+            #
+            # For a joint-space task (J_i = I) this reduces to || B^-1 (tau - f_i) ||^2, i.e.
+            # inertia-weighted, which is what the paper specifies. An earlier version special-cased
+            # level >= 1 as || tau - f_i ||^2 (identity-weighted); that was not the paper's cost and
+            # it silently assumed f_i was a joint-torque vector, so any Cartesian task below level 0
+            # failed on shape.
+            target_force_proj = M_i @ J_i.T @ f_i          # (m_i,)
+            H_i = M_i.T @ M_i + self.reg_eps * np.eye(n_dofs)
+            g_i = -M_i.T @ target_force_proj               # (n_dofs,)
 
-                tau_opt = self.qp_solver.solve(
-                    H=H0,
-                    g=g0,
-                    lb=lb,
-                    ub=ub
-                )
-
-                # Store equality constraint for priority preservation in subsequent QPs
-                prev_A_eq_list.append(M_i)
-                prev_b_eq_list.append(M_i @ tau_opt)
-
-            else:
-                # Level 1+ QP: Secondary Task subject to Strict Priority Equality Constraints
-                H_i = (1.0 + self.reg_eps) * np.eye(n_dofs)
-                g_i = - f_i  # f_i is posture torque tau_null for JointPostureTask
-
+            # Strict priority: reproduce every higher-priority level's optimum exactly (eq. 17).
+            if prev_A_eq_list:
                 A_eq = np.vstack(prev_A_eq_list)
                 b_eq = np.concatenate(prev_b_eq_list)
+            else:
+                A_eq = None
+                b_eq = None
 
-                tau_opt = self.qp_solver.solve(
-                    H=H_i,
-                    g=g_i,
-                    lb=lb,
-                    ub=ub,
-                    A_eq=A_eq,
-                    b_eq=b_eq
-                )
+            tau_opt = self.qp_solver.solve(H=H_i, g=g_i, lb=lb, ub=ub, A_eq=A_eq, b_eq=b_eq)
 
-                # Update equality constraints list for higher levels if any
-                prev_A_eq_list.append(M_i)
-                prev_b_eq_list.append(M_i @ tau_opt)
+            # Carry this level's optimum forward as a constraint on all lower levels.
+            prev_A_eq_list.append(M_i)
+            prev_b_eq_list.append(M_i @ tau_opt)
+            level_torques.append(tau_opt.copy())
 
-        # Final total joint torque command: tau_cmd = tau_opt + h(q, dq)
+        # Priority check: did the final solution preserve every higher level's task-space outcome?
+        self.level_torques = level_torques
+        self.priority_residuals = [
+            float(np.linalg.norm(A_k @ tau_opt - b_k))
+            for A_k, b_k in zip(prev_A_eq_list, prev_b_eq_list)
+        ]
+
+        # Final total joint torque command: tau_cmd = tau_opt + h(q, dq)   (eq. 20)
         tau_cmd = tau_opt + h
 
-        # Enforce strict saturation clipping as safeguard
-        tau_cmd = np.clip(tau_cmd, self.tau_min, self.tau_max)
+        # No clipping. Equations (19)-(21) make the result provably feasible: the QP was bounded by
+        # [tau_min - h, tau_max - h], so adding h back lands inside [tau_min, tau_max]. Clipping here
+        # would silently discard the QP's optimality and priority ordering, and would mask any bug
+        # that broke the guarantee. Measure it instead.
+        overshoot = float(np.max(np.maximum(self.tau_min - tau_cmd, tau_cmd - self.tau_max)))
+        self.n_solves += 1
+        if overshoot > self.violation_tol:
+            self.n_violations += 1
+            self.max_violation = max(self.max_violation, overshoot)
+            if self.n_violations <= 5:
+                logger.warning(
+                    f"torque bound violated by {overshoot:.4f} Nm - the eq.(19)-(21) guarantee "
+                    f"does not hold, check that h and the QP bounds agree"
+                )
 
         return tau_cmd
