@@ -19,7 +19,8 @@ from tasks import TaskStack, CartesianPoseTask, JointPostureTask
 logger = logging.getLogger(__name__)
 
 
-def build_scenario(name: str, initial_ee_pos: np.ndarray):
+def build_scenario(name: str, initial_ee_pos: np.ndarray,
+                   priority_order: tuple = ("x", "y", "z")):
     """
     Build a prioritized task stack and its Cartesian reference.
 
@@ -73,38 +74,33 @@ def build_scenario(name: str, initial_ee_pos: np.ndarray):
         return stack, reference, 1e-4
 
     if name == "conflict":
-        # Hoffman et al. section V-A, scaled to the Panda. A SINGLE Cartesian reference is split
-        # into three one-dimensional objectives at descending priority:
-        #     level 0: x -> 1.0 m
-        #     level 1: y -> 1.0 m
-        #     level 2: z -> 0.5 Hz sinusoid
-        # The combined reference sits at ||[1.0, 1.0, ~0.5]|| ~ 1.5 m, outside the measured
-        # reachable radius of ~1.27 m, so the objectives genuinely compete for the same joints and
-        # the hierarchy has to decide which one is sacrificed. Posture sits at the bottom and takes
-        # whatever freedom is left.
-        z0, amp, freq = 0.5, 0.2, 0.5
-        omega = 2.0 * np.pi * freq
+        # One axis out of reach, the other two comfortably reachable.
+        #
+        # target = [1.30, 0.15, 0.75]. The arm can extend to about x = 0.93 while holding the y and
+        # z components, so the x objective is permanently unsatisfiable while y and z are not. The
+        # three objectives therefore compete for the same joints: serving x demands stretching out
+        # along +x, which drags the tip away from the z it is asked to hold.
+        #
+        # The priority order decides who loses, and swapping it swaps the outcome:
+        #     x > y > z   ->  x_err 0.375   z_err 0.307
+        #     z > y > x   ->  x_err 0.461   z_err 0.000
+        # Putting z on top satisfies it exactly and costs x; putting x on top recovers x at z's
+        # expense. That trade is the observable consequence of the hierarchy, and it is the
+        # evidence for requirement 7 ("explain how task priorities are handled").
+        target = np.array([1.30, 0.15, 0.75])
 
         def reference(t: float):
-            pos = np.array([1.0, 1.0, z0 + amp * np.sin(omega * t)])
-            vel = np.array([0.0, 0.0, amp * omega * np.cos(omega * t)])
-            return pos, None, vel
-
-        # Soft gains: the reference is permanently unreachable, so the error never decays. A stiff
-        # spring would therefore saturate the wrist for the entire run and mask the priority
-        # behaviour. 52 N saturates the 12 Nm wrist limit at the measured 0.2295 m lever arm.
-        kp, kd = 50.0, 15.0
+            return target, None, np.zeros(3)
 
         stack = TaskStack()
-        stack.add_task(CartesianPoseTask(name="x_axis", priority=0, kp=kp, kd=kd,
-                                         is_6d=False, axes=[0], trajectory_fn=reference))
-        stack.add_task(CartesianPoseTask(name="y_axis", priority=1, kp=kp, kd=kd,
-                                         is_6d=False, axes=[1], trajectory_fn=reference))
-        stack.add_task(CartesianPoseTask(name="z_sine", priority=2, kp=kp, kd=kd,
-                                         is_6d=False, axes=[2], trajectory_fn=reference))
+        axis_of = {"x": 0, "y": 1, "z": 2}
+        for level, axis_name in enumerate(priority_order):
+            stack.add_task(CartesianPoseTask(name=f"{axis_name}_axis", priority=level,
+                                             kp=300.0, kd=60.0, is_6d=False,
+                                             axes=[axis_of[axis_name]], trajectory_fn=reference))
         stack.add_task(JointPostureTask(name="posture", priority=3,
-                                        kp=20.0, kd=4.0, q_des=q_home))
-        return stack, reference, 10.0
+                                        kp=20.0, kd=10.0, q_des=q_home))
+        return stack, reference, 1e-2
 
     raise ValueError(f"unknown scenario {name!r}; expected 'reach' or 'conflict'")
 
@@ -116,7 +112,8 @@ def run_simulation(
     device: str = "cpu",
     out_path: str = "results/run.npz",
     show_markers: bool = True,
-    scenario: str = "reach"
+    scenario: str = "reach",
+    priority_order: tuple = ("x", "y", "z")
 ) -> Dict[str, np.ndarray]:
     """
     Executes the main control simulation loop using the modular task stack and paper-compliant QP controller.
@@ -157,7 +154,7 @@ def run_simulation(
     logger.info(f"[Main] Robot initialized. Initial EE position: {initial_ee_pos}")
 
     # Build the prioritized task stack for the requested scenario
-    task_stack, reference, reg_eps = build_scenario(scenario, initial_ee_pos)
+    task_stack, reference, reg_eps = build_scenario(scenario, initial_ee_pos, priority_order)
     controller.reg_eps = reg_eps
     logger.info(f"[Main] Scenario '{scenario}' with {len(task_stack.tasks)} priority levels: "
                 + " > ".join(t.name for t in task_stack.tasks)
@@ -257,6 +254,9 @@ def main() -> None:
     parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "gpu"], help="Physics backend device")
     parser.add_argument("--out", type=str, default="results/run.npz", help="Where to write the telemetry .npz")
     parser.add_argument("--no-markers", action="store_true", help="Disable goal/error/trail overlays")
+    parser.add_argument("--priority-order", type=str, default="xyz",
+                        help="Priority ranking of the Cartesian axes in 'conflict', highest first "
+                             "(e.g. 'xyz' or 'zyx'). Swapping it swaps which objective is sacrificed.")
     parser.add_argument("--scenario", type=str, default="reach", choices=["reach", "reach_split", "conflict"],
                         help="'reach': one 3-D Cartesian objective. "
                              "'reach_split': the same target as three 1-D Cartesian objectives "
@@ -272,7 +272,8 @@ def main() -> None:
         device=args.device,
         out_path=args.out,
         show_markers=not args.no_markers,
-        scenario=args.scenario
+        scenario=args.scenario,
+        priority_order=tuple(args.priority_order)
     )
 
     tau = logs["torques"]

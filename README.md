@@ -146,13 +146,40 @@ uv run python main.py --no-markers
 | :--- | :--- | :--- | :--- |
 | `reach` | `cartesian (3-D) > posture` | reachable point | One Cartesian objective. Baseline. |
 | `reach_split` | `x > y > z > posture` | the same reachable point | **Three Cartesian objectives at different priorities** (assignment requirement 2). Everything is satisfiable, so all three errors go to zero. |
-| `conflict` | `x > y > z > posture` | out-of-reach point + z sinusoid | Objectives compete; the hierarchy decides who is sacrificed. **Not yet tuned to a steady state.** |
+| `conflict` | configurable, e.g. `x > y > z > posture` | `[1.30, 0.15, 0.75]` — **x out of reach**, y and z reachable | Objectives compete; the priority order decides who is sacrificed. |
 
 `reach` and `reach_split` both converge to `0.0000 m`. That equivalence is the point of
 `reach_split`: decomposing one 3-D objective into three ranked 1-D objectives reproduces the
 undecomposed result exactly, which is only true if the cascade's priority constraints are correct.
 Priority ordering has no *visible* effect there because nothing has to be given up — that requires
 a conflicting reference.
+
+#### Priority ordering decides who is sacrificed
+
+In `conflict` the arm can extend to about `x = 0.93` while holding the commanded y and z, so the x
+objective is permanently unsatisfiable while y and z are not. All three compete for one thing —
+which direction the arm commits its reach to — and the ranking settles it:
+
+| Priority order | x error | y error | z error |
+| :--- | ---: | ---: | ---: |
+| `x > y > z` | **0.371** | 0.024 | 0.332 |
+| `z > y > x` | 0.461 | 0.000 | **0.000** |
+
+```bash
+uv run python main.py --scenario conflict --priority-order xyz
+uv run python main.py --scenario conflict --priority-order zyx
+```
+
+Two things are worth reading off that table.
+
+**Priority does not guarantee success, it guarantees non-interference.** At top priority x still
+fails, with an error of 0.371 — the target is physically out of reach and no ranking can change
+that. What the ranking bought is 0.371 instead of 0.461: nothing below x was permitted to make it
+worse. A lower-priority task can never degrade a higher one.
+
+**Ranking only matters between objectives that actually compete.** The y error is ~0 under both
+orderings, because y = 0.15 is easy and there is enough freedom to satisfy it regardless of where
+it sits in the stack.
 
 A one-dimensional objective is expressed with `CartesianPoseTask(axes=[0])` (x only), `[1]` (y),
 `[2]` (z). This is the decomposition Hoffman et al. use in section V-A.
@@ -189,6 +216,7 @@ Notes:
 | `--no-markers` | `flag` | `False` | Disable the goal, error-line, disturbance and trail overlays. |
 | `--out` | `str` | `results/run.npz` | Destination file for the telemetry log. |
 | `--scenario` | `str` | `reach` | Task hierarchy to run (`reach`, `reach_split`, `conflict`). |
+| `--priority-order` | `str` | `xyz` | Axis ranking in `conflict`, highest priority first (e.g. `xyz`, `zyx`). |
 
 ---
 
