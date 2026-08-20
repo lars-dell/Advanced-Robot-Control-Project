@@ -160,10 +160,58 @@ In `conflict` the arm can extend to about `x = 0.93` while holding the commanded
 objective is permanently unsatisfiable while y and z are not. All three compete for one thing —
 which direction the arm commits its reach to — and the ranking settles it:
 
-| Priority order | x error | y error | z error |
-| :--- | ---: | ---: | ---: |
-| `x > y > z` | **0.371** | 0.024 | 0.332 |
-| `z > y > x` | 0.461 | 0.000 | **0.000** |
+| Priority order | x error | y error | z error | |
+| :--- | ---: | ---: | ---: | :--- |
+| `x > y > z` | **0.376** | 0.019 | 0.293 | x is protected, z absorbs the shortfall |
+| `z > y > x` | 0.461 | 0.000 | **0.000** | z is satisfied exactly, x absorbs it instead |
+
+<table>
+<tr><th><code>--priority-order xyz</code></th><th><code>--priority-order zyx</code></th></tr>
+<tr>
+<td><img src="docs/media/conflict_xyz.gif" width="420" alt="x highest priority"></td>
+<td><img src="docs/media/conflict_zyx.gif" width="420" alt="z highest priority"></td>
+</tr>
+<tr>
+<td>Reach is prioritised: the arm commits further forward and lets the tip sag below the commanded height.</td>
+<td>Height is prioritised: the tip holds the commanded z exactly and gives up reach instead.</td>
+</tr>
+</table>
+
+Both clips are 7 s of the same scenario with the same controller, gains and target — only the
+ranking differs. The green sphere is the (unreachable) target, the amber line is the tracking
+error, and the cyan trail is the path of the tool tip.
+
+![Per-axis tracking error under both priority orders](docs/media/conflict_task_errors.png)
+
+The crossover between the first and third panels is the whole result. In **x**, blue (x on top)
+settles *below* orange — 0.376 against 0.461. In **z** they invert: orange is flat at 0.000 while
+blue oscillates around 0.293. The **y** panel shows both near zero, because y is satisfiable either
+way and the ranking never has to decide anything.
+
+Two honest caveats. Priority did not make x succeed — 0.376 is still a large error, because the
+target is out of reach and no ranking can change physics. And the z trace under `x > y > z` never
+settles; it oscillates for the full run rather than converging.
+
+![Share of control steps each joint spends at its torque bound](docs/media/conflict_torques.png)
+
+Every joint touches its bound at some point, so peak utilisation is 1.0 across the board and
+carries no information; what varies is how long each stays there. Under `x > y > z` the shoulder
+(J2) is pinned for **80%** of the run and the 12 N·m wrist joints J5/J6 for **53%** and **70%** —
+the joints the lever-arm geometry predicts would saturate first. Every bar is far lower under
+`z > y > x`: prioritising the unreachable objective costs much more actuator effort *and* gives a
+worse overall outcome.
+
+Across both runs there were **0 torque-limit violations in 2,800 control steps**, with no clipping
+anywhere in the controller. That is the evidence for requirement 4 — feasibility comes from the QP
+bounds of eq. (19)–(21), not from clamping the output.
+
+Regenerate both figures from the logs with:
+
+```bash
+uv run python main.py --no-vis --time 7 --scenario conflict --priority-order xyz --out results/conflict_xyz.npz
+uv run python main.py --no-vis --time 7 --scenario conflict --priority-order zyx --out results/conflict_zyx.npz
+uv run python scripts/plot_results.py
+```
 
 ```bash
 uv run python main.py --scenario conflict --priority-order xyz
@@ -217,6 +265,7 @@ Notes:
 | `--out` | `str` | `results/run.npz` | Destination file for the telemetry log. |
 | `--scenario` | `str` | `reach` | Task hierarchy to run (`reach`, `reach_split`, `conflict`). |
 | `--priority-order` | `str` | `xyz` | Axis ranking in `conflict`, highest priority first (e.g. `xyz`, `zyx`). |
+| `--record` | `str` | `None` | Record the run to a file, e.g. `docs/media/run.gif`. |
 
 ---
 

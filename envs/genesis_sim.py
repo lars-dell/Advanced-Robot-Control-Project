@@ -87,7 +87,9 @@ class GenesisSim:
         dt: float = 0.005,
         device: str = "cpu",
         ee_link_name: str = "tool_tip",
-        show_markers: bool = True
+        show_markers: bool = True,
+        record_path: Optional[str] = None,
+        record_fps: int = 12
     ) -> None:
         """
         Initialize the Genesis simulation wrapper.
@@ -116,6 +118,14 @@ class GenesisSim:
         # Markers are viewer-only: the goal is a massless, collision-free entity, everything else
         # is debug-draw overlay. None of it touches the physics.
         self.show_markers = show_markers
+        # Offscreen recording. The camera is created with debug=True so the marker overlays are
+        # included in the render, not just the live viewer.
+        self.record_path = record_path
+        self.record_fps = record_fps
+        self._camera = None
+        self._frames: List[np.ndarray] = []
+        self._record_every = max(1, int(round(1.0 / (record_fps * dt)))) if record_path else 0
+        self._record_step = 0
         self._viz_every = 5          # redraw every Nth control step (dt=0.005 -> 40 Hz)
         self._trail_every = 10       # sample the tip trail every Nth step
         self._trail_max = 300        # breadcrumbs retained
@@ -186,7 +196,7 @@ class GenesisSim:
         # Gated on the viewer too: with no viewer the entity is invisible but still costs scene
         # setup time (~17% on a headless run). If offscreen camera rendering is added later, this
         # condition must widen to include that case.
-        if self.show_markers and self.show_viewer:
+        if self.show_markers and (self.show_viewer or self.record_path is not None):
             self.goal_marker = self.scene.add_entity(
                 gs.morphs.Sphere(
                     radius=0.02,
@@ -195,6 +205,13 @@ class GenesisSim:
                     batch_fixed_verts=True,
                 ),
                 surface=gs.surfaces.Emission(color=(0.0, 1.0, 0.0)),
+            )
+
+        # Recording camera, added before build() like every other entity.
+        if self.record_path is not None:
+            self._camera = self.scene.add_camera(
+                res=(480, 360), pos=(1.6, -1.4, 1.2), lookat=(0.55, 0.1, 0.5),
+                fov=45, GUI=False, debug=True,
             )
 
         # Build simulation scene
@@ -374,9 +391,43 @@ class GenesisSim:
     #                              Visualization                             #
     # ---------------------------------------------------------------------- #
 
+    def start_recording(self) -> None:
+        """Begin capturing frames."""
+        self._frames = []
+
+    def record_frame(self) -> None:
+        """Capture one frame, throttled to the configured fps."""
+        if self._camera is None:
+            return
+        self._record_step += 1
+        if self._record_step % self._record_every == 0:
+            rgb = self._camera.render()
+            if isinstance(rgb, tuple):
+                rgb = rgb[0]
+            self._frames.append(np.asarray(rgb, dtype=np.uint8).copy())
+
+    def stop_recording(self) -> None:
+        """
+        Write the captured frames to disk.
+
+        Genesis's own recorder is hard-wired to the libx264 codec and so only writes mp4. Frames
+        are collected here instead and written with imageio, which allows GIF -- the format that
+        renders inline in a GitHub README, and the one this repo's .gitignore does not exclude.
+        """
+        if self._camera is None or not self._frames:
+            return
+        import imageio.v2 as imageio
+        out = pathlib.Path(self.record_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if out.suffix.lower() == ".gif":
+            imageio.mimsave(out, self._frames, fps=self.record_fps, loop=0)
+        else:
+            imageio.mimsave(out, self._frames, fps=self.record_fps)
+        self._frames = []
+
     def _viz_active(self) -> bool:
         """Markers are pure cost when there is no viewer to show them in."""
-        return bool(self.show_markers and self.show_viewer)
+        return bool(self.show_markers and (self.show_viewer or self._camera is not None))
 
     def set_goal(self, pos: np.ndarray) -> None:
         """

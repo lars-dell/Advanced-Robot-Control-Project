@@ -113,7 +113,8 @@ def run_simulation(
     out_path: str = "results/run.npz",
     show_markers: bool = True,
     scenario: str = "reach",
-    priority_order: tuple = ("x", "y", "z")
+    priority_order: tuple = ("x", "y", "z"),
+    record_path: str = None
 ) -> Dict[str, np.ndarray]:
     """
     Executes the main control simulation loop using the modular task stack and paper-compliant QP controller.
@@ -135,7 +136,8 @@ def run_simulation(
         show_viewer=show_viewer,
         dt=dt,
         device=device,
-        show_markers=show_markers
+        show_markers=show_markers,
+        record_path=record_path
     )
 
     logger.info("[Main] Instantiating Hierarchical QP Impedance Controller (CasADi / qpOASES)...")
@@ -161,6 +163,8 @@ def run_simulation(
                 + f"  (reg_eps={reg_eps:g})")
 
     sim.set_goal(reference(0.0)[0])
+
+    sim.start_recording()
 
     n_steps = int(sim_time / dt)
     logger.info(f"[Main] Starting simulation control loop for {sim_time} seconds ({n_steps} steps)...")
@@ -200,6 +204,7 @@ def run_simulation(
         # Refresh viewer overlays (no-op when headless; internally throttled)
         sim.set_goal(target_pos)
         sim.update_viz(tip_pos=state["ee_pos"], goal_pos=target_pos)
+        sim.record_frame()
 
         # Log telemetry data
         log_time.append(t_curr)
@@ -213,6 +218,10 @@ def run_simulation(
             errs = " ".join(f"{k}={v:.3f}" for k, v in log_task_errors[-1].items())
             logger.info(f"Step {step:4d}/{n_steps} | t={t_curr:5.2f}s | {errs} | "
                         f"max|tau|={np.max(np.abs(torques)):5.2f} Nm")
+
+    sim.stop_recording()
+    if record_path:
+        logger.info(f"[Main] Recording written to {record_path}")
 
     logger.info("[Main] Simulation completed successfully.")
 
@@ -254,6 +263,8 @@ def main() -> None:
     parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "gpu"], help="Physics backend device")
     parser.add_argument("--out", type=str, default="results/run.npz", help="Where to write the telemetry .npz")
     parser.add_argument("--no-markers", action="store_true", help="Disable goal/error/trail overlays")
+    parser.add_argument("--record", type=str, default=None,
+                        help="Record the run to this file (e.g. docs/media/run.gif)")
     parser.add_argument("--priority-order", type=str, default="xyz",
                         help="Priority ranking of the Cartesian axes in 'conflict', highest first "
                              "(e.g. 'xyz' or 'zyx'). Swapping it swaps which objective is sacrificed.")
@@ -273,7 +284,8 @@ def main() -> None:
         out_path=args.out,
         show_markers=not args.no_markers,
         scenario=args.scenario,
-        priority_order=tuple(args.priority_order)
+        priority_order=tuple(args.priority_order),
+        record_path=args.record
     )
 
     tau = logs["torques"]
