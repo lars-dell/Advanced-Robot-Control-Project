@@ -2,7 +2,7 @@
 Cartesian space impedance control task implementation.
 """
 
-from typing import Dict, Tuple, Optional, Callable, Any
+from typing import Dict, Tuple, Optional, Callable, Any, Sequence
 import numpy as np
 
 from tasks.base_task import BaseTask
@@ -22,7 +22,8 @@ class CartesianPoseTask(BaseTask):
         kd: float = 40.0,
         is_6d: bool = False,
         use_full_impedance: bool = False,
-        trajectory_fn: Optional[Callable[[float], Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]]] = None
+        trajectory_fn: Optional[Callable[[float], Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]]] = None,
+        axes: Optional[Sequence[int]] = None
     ) -> None:
         """
         Initialize Cartesian Pose Task.
@@ -35,6 +36,15 @@ class CartesianPoseTask(BaseTask):
             is_6d: Whether to control 6D pose (True) or 3D position (False).
             use_full_impedance: If True, uses Lambda mass matrix weighting; if False, uses VMC.
             trajectory_fn: Optional dynamic reference function t -> (pos_des, rot_des, vel_des).
+            axes: Subset of task-space rows this objective controls, e.g. [0] for x only or
+                [2] for z only. None controls all of them (3 for position, 6 for pose).
+
+                This is what lets a single Cartesian position be split into several independent
+                objectives at different priorities, which is the decomposition Hoffman et al. use
+                in section V-A: "reach 1.0 m along x", "reach 1.0 m along y" and "follow a sinusoid
+                in z" are three one-dimensional tasks, not one three-dimensional one. Splitting
+                them is what makes the priority ordering observable -- the axes then compete for
+                the same joints and the hierarchy decides which one is sacrificed.
         """
         super().__init__(name=name, priority=priority)
         self.kp = kp
@@ -42,6 +52,7 @@ class CartesianPoseTask(BaseTask):
         self.is_6d = is_6d
         self.use_full_impedance = use_full_impedance
         self.trajectory_fn = trajectory_fn
+        self.axes = None if axes is None else np.asarray(axes, dtype=int)
 
     def compute(self, state: Dict[str, np.ndarray], t: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -87,6 +98,13 @@ class CartesianPoseTask(BaseTask):
 
         v_err = v_des - v_curr
 
+        # Restrict to the controlled axes. Done after the full task-space velocity is formed, so
+        # v_curr still comes from the complete Jacobian row set.
+        if self.axes is not None:
+            J_task = J_task[self.axes, :]
+            e_task = e_task[self.axes]
+            v_err = v_err[self.axes]
+
         if self.use_full_impedance:
             # Full Cartesian Impedance Law
             # Lambda = (J * B^(-1) * J^T)^(-1)
@@ -110,5 +128,11 @@ class CartesianPoseTask(BaseTask):
         Computes positional tracking error norm.
         """
         p_curr = state["ee_pos"]
-        p_des = state.get("target_pos", p_curr)
-        return float(np.linalg.norm(p_des - p_curr))
+        if self.trajectory_fn is not None:
+            p_des = self.trajectory_fn(state.get("t", 0.0))[0]
+        else:
+            p_des = state.get("target_pos", p_curr)
+        err = np.asarray(p_des) - np.asarray(p_curr)
+        if self.axes is not None:
+            err = err[self.axes]
+        return float(np.linalg.norm(err))

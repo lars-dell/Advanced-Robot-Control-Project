@@ -19,13 +19,104 @@ from tasks import TaskStack, CartesianPoseTask, JointPostureTask
 logger = logging.getLogger(__name__)
 
 
+def build_scenario(name: str, initial_ee_pos: np.ndarray):
+    """
+    Build a prioritized task stack and its Cartesian reference.
+
+    Returns:
+        (TaskStack, reference_fn, reg_eps) where reference_fn(t) -> (pos_des, rot_des, vel_des)
+        and reg_eps is the QP regularisation weight this scenario needs.
+
+    On reg_eps: the eps*||tau||^2 term in eq. (18) trades task accuracy against robustness in
+    near-singular configurations. A scenario that stays well inside the workspace wants it small
+    (1e-4 tracks to ~0 error). A scenario deliberately driven to the workspace boundary needs it
+    large: measured on 'conflict', eps=1e-4 leaves the arm unstable at 40 rad/s with 65 failed QPs,
+    while eps=10 gives 1.95 rad/s and none. It is therefore a per-scenario parameter, not a global
+    default.
+    """
+    q_home = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785])
+
+    if name == "reach":
+        # The original single-objective demo: move to a nearby reachable point and hold it.
+        # One Cartesian objective plus a joint-space posture task, which cannot conflict with it
+        # because the posture target is compatible with the Cartesian one.
+        target = initial_ee_pos + np.array([0.15, 0.10, -0.05])
+
+        def reference(t: float):
+            return target, None, np.zeros(3)
+
+        stack = TaskStack()
+        stack.add_task(CartesianPoseTask(name="cartesian_primary", priority=0,
+                                         kp=400.0, kd=40.0, is_6d=False,
+                                         trajectory_fn=reference))
+        stack.add_task(JointPostureTask(name="posture", priority=1,
+                                        kp=20.0, kd=4.0, q_des=q_home))
+        return stack, reference, 1e-4
+
+    if name == "reach_split":
+        # Same reachable target as 'reach', but the single 3-D Cartesian objective is SPLIT into
+        # three independent 1-D objectives at descending priority (x > y > z). Every one of them is
+        # satisfiable at once, so this isolates one thing: does decomposing a task into a priority
+        # stack still reproduce the undecomposed result? If the cascade is correct it must, because
+        # nothing is being traded off. It is the control case for the conflicting version.
+        target = initial_ee_pos + np.array([0.15, 0.10, -0.05])
+
+        def reference(t: float):
+            return target, None, np.zeros(3)
+
+        stack = TaskStack()
+        for axis, (nm, pr) in enumerate((("x_axis", 0), ("y_axis", 1), ("z_axis", 2))):
+            stack.add_task(CartesianPoseTask(name=nm, priority=pr, kp=400.0, kd=40.0,
+                                             is_6d=False, axes=[axis], trajectory_fn=reference))
+        stack.add_task(JointPostureTask(name="posture", priority=3,
+                                        kp=20.0, kd=4.0, q_des=q_home))
+        return stack, reference, 1e-4
+
+    if name == "conflict":
+        # Hoffman et al. section V-A, scaled to the Panda. A SINGLE Cartesian reference is split
+        # into three one-dimensional objectives at descending priority:
+        #     level 0: x -> 1.0 m
+        #     level 1: y -> 1.0 m
+        #     level 2: z -> 0.5 Hz sinusoid
+        # The combined reference sits at ||[1.0, 1.0, ~0.5]|| ~ 1.5 m, outside the measured
+        # reachable radius of ~1.27 m, so the objectives genuinely compete for the same joints and
+        # the hierarchy has to decide which one is sacrificed. Posture sits at the bottom and takes
+        # whatever freedom is left.
+        z0, amp, freq = 0.5, 0.2, 0.5
+        omega = 2.0 * np.pi * freq
+
+        def reference(t: float):
+            pos = np.array([1.0, 1.0, z0 + amp * np.sin(omega * t)])
+            vel = np.array([0.0, 0.0, amp * omega * np.cos(omega * t)])
+            return pos, None, vel
+
+        # Soft gains: the reference is permanently unreachable, so the error never decays. A stiff
+        # spring would therefore saturate the wrist for the entire run and mask the priority
+        # behaviour. 52 N saturates the 12 Nm wrist limit at the measured 0.2295 m lever arm.
+        kp, kd = 50.0, 15.0
+
+        stack = TaskStack()
+        stack.add_task(CartesianPoseTask(name="x_axis", priority=0, kp=kp, kd=kd,
+                                         is_6d=False, axes=[0], trajectory_fn=reference))
+        stack.add_task(CartesianPoseTask(name="y_axis", priority=1, kp=kp, kd=kd,
+                                         is_6d=False, axes=[1], trajectory_fn=reference))
+        stack.add_task(CartesianPoseTask(name="z_sine", priority=2, kp=kp, kd=kd,
+                                         is_6d=False, axes=[2], trajectory_fn=reference))
+        stack.add_task(JointPostureTask(name="posture", priority=3,
+                                        kp=20.0, kd=4.0, q_des=q_home))
+        return stack, reference, 10.0
+
+    raise ValueError(f"unknown scenario {name!r}; expected 'reach' or 'conflict'")
+
+
 def run_simulation(
     sim_time: float = 5.0,
     dt: float = 0.005,
     show_viewer: bool = True,
     device: str = "cpu",
     out_path: str = "results/run.npz",
-    show_markers: bool = True
+    show_markers: bool = True,
+    scenario: str = "reach"
 ) -> Dict[str, np.ndarray]:
     """
     Executes the main control simulation loop using the modular task stack and paper-compliant QP controller.
@@ -65,37 +156,14 @@ def run_simulation(
     initial_ee_pos = initial_state["ee_pos"].copy()
     logger.info(f"[Main] Robot initialized. Initial EE position: {initial_ee_pos}")
 
-    # Define target reference setpoints
-    target_ee_pos = initial_ee_pos + np.array([0.15, 0.10, -0.05])
-    target_ee_rot = initial_state["ee_rot"].copy()
-    target_q_null = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785])
+    # Build the prioritized task stack for the requested scenario
+    task_stack, reference, reg_eps = build_scenario(scenario, initial_ee_pos)
+    controller.reg_eps = reg_eps
+    logger.info(f"[Main] Scenario '{scenario}' with {len(task_stack.tasks)} priority levels: "
+                + " > ".join(t.name for t in task_stack.tasks)
+                + f"  (reg_eps={reg_eps:g})")
 
-    # Show where the primary Cartesian task is aiming.
-    sim.set_goal(target_ee_pos)
-
-    # Construct modular task stack hierarchy
-    task_stack = TaskStack()
-
-    # Priority 0: Primary Cartesian 3D Position Impedance Task
-    cart_task = CartesianPoseTask(
-        name="cartesian_primary",
-        priority=0,
-        kp=400.0,
-        kd=40.0,
-        is_6d=False,
-        use_full_impedance=False
-    )
-    task_stack.add_task(cart_task)
-
-    # Priority 1: Secondary Joint Posture Null-Space Task
-    posture_task = JointPostureTask(
-        name="posture_secondary",
-        priority=1,
-        kp=20.0,
-        kd=4.0,
-        q_des=target_q_null
-    )
-    task_stack.add_task(posture_task)
+    sim.set_goal(reference(0.0)[0])
 
     n_steps = int(sim_time / dt)
     logger.info(f"[Main] Starting simulation control loop for {sim_time} seconds ({n_steps} steps)...")
@@ -107,14 +175,16 @@ def run_simulation(
     log_torques: List[np.ndarray] = []
     log_errors: List[np.ndarray] = []
 
+    log_task_errors: List[Dict[str, float]] = []
+
     for step in range(n_steps):
         t_curr = step * dt
 
         # Extract robot dynamics state
         state = sim.get_state()
-        state["target_pos"] = target_ee_pos
-        state["target_rot"] = target_ee_rot
-        state["q_null"] = target_q_null
+        state["t"] = t_curr
+        target_pos = reference(t_curr)[0]
+        state["target_pos"] = target_pos
 
         # Compute commanded joint torques via Hierarchical QP Optimization
         torques = controller.compute_torques(state=state, target=task_stack, t=t_curr)
@@ -122,8 +192,7 @@ def run_simulation(
         # Apply torques to robot joints
         sim.apply_torques(torques)
 
-        # Optional: external disturbance applied to the end-effector for a 0.2 s window.
-        # Genesis links have no apply_force(); GenesisSim injects this as J^T f_ext.
+        # External disturbance for a 0.2 s window (injected as J^T f_ext)
         sim.set_external_force(
             np.array([10.0, 0.0, 0.0]) if 2.0 <= t_curr <= 2.2 else np.zeros(3)
         )
@@ -132,19 +201,21 @@ def run_simulation(
         sim.step()
 
         # Refresh viewer overlays (no-op when headless; internally throttled)
-        sim.update_viz(tip_pos=state["ee_pos"], goal_pos=target_ee_pos)
+        sim.set_goal(target_pos)
+        sim.update_viz(tip_pos=state["ee_pos"], goal_pos=target_pos)
 
         # Log telemetry data
         log_time.append(t_curr)
         log_ee_pos.append(state["ee_pos"].copy())
-        log_ee_pos_des.append(target_ee_pos.copy())
+        log_ee_pos_des.append(target_pos.copy())
         log_torques.append(torques.copy())
-        log_errors.append(cart_task.compute_error(state))
+        log_task_errors.append(task_stack.get_task_errors(state))
+        log_errors.append(float(np.linalg.norm(target_pos - state["ee_pos"])))
 
         if step % 100 == 0:
-            err = cart_task.compute_error(state)
-            max_tau = np.max(np.abs(torques))
-            logger.info(f"Step {step:4d}/{n_steps} | Time: {t_curr:5.2f}s | EE Tracking Error: {err:6.4f}m | Max Torque: {max_tau:5.2f} Nm")
+            errs = " ".join(f"{k}={v:.3f}" for k, v in log_task_errors[-1].items())
+            logger.info(f"Step {step:4d}/{n_steps} | t={t_curr:5.2f}s | {errs} | "
+                        f"max|tau|={np.max(np.abs(torques)):5.2f} Nm")
 
     logger.info("[Main] Simulation completed successfully.")
 
@@ -158,6 +229,9 @@ def run_simulation(
         "tau_min": sim.tau_min,
         "tau_max": sim.tau_max,
         # Feasibility evidence: the paper guarantees these stay at zero without any clipping.
+        **{f"err_{name}": np.array([e[name] for e in log_task_errors])
+           for name in (log_task_errors[0] if log_task_errors else {})},
+        "task_names": np.array([t.name for t in task_stack.tasks]),
         "n_violations": controller.n_violations,
         "n_solves": controller.n_solves,
         "max_violation": controller.max_violation,
@@ -183,6 +257,12 @@ def main() -> None:
     parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "gpu"], help="Physics backend device")
     parser.add_argument("--out", type=str, default="results/run.npz", help="Where to write the telemetry .npz")
     parser.add_argument("--no-markers", action="store_true", help="Disable goal/error/trail overlays")
+    parser.add_argument("--scenario", type=str, default="reach", choices=["reach", "reach_split", "conflict"],
+                        help="'reach': one 3-D Cartesian objective. "
+                             "'reach_split': the same target as three 1-D Cartesian objectives "
+                             "at descending priority (reachable, so nothing is sacrificed). "
+                             "'conflict': three 1-D Cartesian objectives competing for an "
+                             "out-of-reach reference (Hoffman et al. sec. V-A)")
     args = parser.parse_args()
 
     logs = run_simulation(
@@ -191,7 +271,8 @@ def main() -> None:
         show_viewer=not args.no_vis,
         device=args.device,
         out_path=args.out,
-        show_markers=not args.no_markers
+        show_markers=not args.no_markers,
+        scenario=args.scenario
     )
 
     tau = logs["torques"]

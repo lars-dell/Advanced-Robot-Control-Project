@@ -138,6 +138,25 @@ uv run python main.py --time 60
 uv run python main.py --no-markers
 ```
 
+### Scenarios
+
+`--scenario` selects the priority hierarchy. All three use the same controller.
+
+| Scenario | Priority levels | Reference | Purpose |
+| :--- | :--- | :--- | :--- |
+| `reach` | `cartesian (3-D) > posture` | reachable point | One Cartesian objective. Baseline. |
+| `reach_split` | `x > y > z > posture` | the same reachable point | **Three Cartesian objectives at different priorities** (assignment requirement 2). Everything is satisfiable, so all three errors go to zero. |
+| `conflict` | `x > y > z > posture` | out-of-reach point + z sinusoid | Objectives compete; the hierarchy decides who is sacrificed. **Not yet tuned to a steady state.** |
+
+`reach` and `reach_split` both converge to `0.0000 m`. That equivalence is the point of
+`reach_split`: decomposing one 3-D objective into three ranked 1-D objectives reproduces the
+undecomposed result exactly, which is only true if the cascade's priority constraints are correct.
+Priority ordering has no *visible* effect there because nothing has to be given up — that requires
+a conflicting reference.
+
+A one-dimensional objective is expressed with `CartesianPoseTask(axes=[0])` (x only), `[1]` (y),
+`[2]` (z). This is the decomposition Hoffman et al. use in section V-A.
+
 ### Visualization
 
 When the viewer is open, the simulation draws what the controller is doing:
@@ -169,6 +188,7 @@ Notes:
 | `--device` | `str` | `cpu` | Genesis physics backend (`cpu` or `gpu`). |
 | `--no-markers` | `flag` | `False` | Disable the goal, error-line, disturbance and trail overlays. |
 | `--out` | `str` | `results/run.npz` | Destination file for the telemetry log. |
+| `--scenario` | `str` | `reach` | Task hierarchy to run (`reach`, `reach_split`, `conflict`). |
 
 ---
 
