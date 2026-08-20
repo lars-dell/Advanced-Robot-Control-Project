@@ -125,15 +125,40 @@ source .venv/bin/activate
 Run the control simulation with interactive 3D rendering or headless:
 
 ```bash
-# Run simulation with 3D GUI viewer (default: 5.0 seconds on GPU backend)
+# Run simulation with 3D GUI viewer (default: 5.0 seconds on the CPU backend)
 uv run python main.py
 
 # Run headless simulation (no visualizer window)
 uv run python main.py --no-vis
 
-# Run simulation on CPU backend for 10 seconds
-uv run python main.py --device cpu --time 10.0
+# Run for 60 seconds so the viewer window stays open long enough to watch
+uv run python main.py --time 60
+
+# Run with the viewer but without any markers
+uv run python main.py --no-markers
 ```
+
+### Visualization
+
+When the viewer is open, the simulation draws what the controller is doing:
+
+| Element | Appearance | Meaning |
+| :--- | :--- | :--- |
+| **Goal** | green glowing sphere (r = 2 cm) | Where the primary Cartesian task is aiming |
+| **Error line** | amber line, tool tip → goal | **Its length _is_ the tracking error.** It shrinks to nothing as the arm converges |
+| **Disturbance** | red arrow at the tool tip | The external force while it acts (2 cm of arrow per newton). Visible only during the t = 2.0–2.2 s push |
+| **Trail** | cyan breadcrumbs, fading with age | Path the tool tip has travelled, including the kink where the disturbance knocked it off course |
+
+Turn everything off with `--no-markers`.
+
+Notes:
+- Overlays are **viewer-only**. In a headless run (`--no-vis`) they are skipped entirely and cost
+  nothing, so telemetry runs are unaffected.
+- The goal marker is **massless and collision-free**, and the other three elements are debug-draw
+  overlays rather than scene objects. None of them can perturb the physics — verified by comparing
+  headless runs with markers on and off, which produce identical results.
+- The overlays are redrawn every 5th control step (40 Hz at the default `dt`). Redrawing at the full
+  200 Hz would take the viewer lock every step and measurably slow the simulation.
 
 ### CLI Command Line Arguments for `main.py`
 | Argument | Type | Default | Description |
@@ -141,7 +166,9 @@ uv run python main.py --device cpu --time 10.0
 | `--time` | `float` | `5.0` | Total simulation duration in seconds. |
 | `--dt` | `float` | `0.005` | Control loop timestep in seconds (200 Hz). |
 | `--no-vis` | `flag` | `False` | Run in headless mode without 3D viewer window. |
-| `--device` | `str` | `gpu` | Genesis physics backend (`cpu` or `gpu`). |
+| `--device` | `str` | `cpu` | Genesis physics backend (`cpu` or `gpu`). |
+| `--no-markers` | `flag` | `False` | Disable the goal, error-line, disturbance and trail overlays. |
+| `--out` | `str` | `results/run.npz` | Destination file for the telemetry log. |
 
 ---
 
@@ -152,4 +179,11 @@ During simulation, `main.py` logs operational telemetry to the console:
 - **End-Effector Tracking Error Norm ($[m]$)**
 - **Maximum Commanded Joint Torque ($\max |\tau| \, [\text{N}\cdot\text{m}]$)**
 
-Between $t=2.0\text{s}$ and $t=2.2\text{s}$, an external 3D force perturbation ($[10, 0, 0]\,\text{N}$) is applied to the end-effector link to demonstrate compliant interaction and robust trajectory recovery under joint-torque constraints.
+At the end of the run a summary line reports the final tracking error, the peak commanded torque,
+and a **torque-limit violation count**, and the full per-step telemetry is written to
+`results/run.npz` (override with `--out`) for offline plotting.
+
+Between $t=2.0\text{s}$ and $t=2.2\text{s}$, an external force ($[10, 0, 0]\,\text{N}$) is applied
+at the end-effector to demonstrate compliant interaction and recovery. Genesis links expose no
+`apply_force()`, so the disturbance is injected as the equivalent joint torque $J_{lin}^T f_{ext}$;
+it is drawn as a red arrow while it acts.
