@@ -282,10 +282,6 @@ class GenesisSim:
         q_np = _tensor_to_numpy(q_raw)[:self._arm_dof_dim]
         dq_np = _tensor_to_numpy(dq_raw)[:self._arm_dof_dim]
 
-        # Joint space mass matrix M(q) / B(q)
-        M_raw = self.robot.get_mass_mat()
-        M_np = _tensor_to_numpy(M_raw)[:self._arm_dof_dim, :self._arm_dof_dim]
-
         # End-effector Jacobian J(q)
         J_raw = self.robot.get_jacobian(link=self.ee_link)
         J_np = _tensor_to_numpy(J_raw)[:, :self._arm_dof_dim]  # (6, 7)
@@ -301,6 +297,26 @@ class GenesisSim:
 
         # h(q, dq) = C(q, dq) * dq + g(q), exactly. Genesis has no equivalent call.
         h_np = np.asarray(self._mj_data.qfrc_bias[:self._arm_dof_dim], dtype=np.float64).copy()
+
+        # Mass matrix from the same synced source. Genesis's get_mass_mat() is NOT refreshed by
+        # set_qpos alone -- after a reset it still reflects the previous step's configuration
+        # (measured: B differs by 2.47 while q, dq, J and ee_pos are all bit-identical). That
+        # staleness made the whole simulation irreproducible, because a wrong B changes the QP's
+        # H and g on the very first control step. Taking B from the shadow model guarantees it is
+        # consistent with the q and dq that h was computed from.
+        # data.M is a packed sparse triangle in MuJoCo 3.x, so build the dense matrix a column at
+        # a time with mj_mulM (B e_i = i-th column). Seven columns, negligible cost, and stable
+        # across MuJoCo versions.
+        nv = self._mj_model.nv
+        M_full = np.zeros((nv, nv), dtype=np.float64)
+        e = np.zeros(nv, dtype=np.float64)
+        col = np.zeros(nv, dtype=np.float64)
+        for i in range(nv):
+            e[:] = 0.0
+            e[i] = 1.0
+            mujoco.mj_mulM(self._mj_model, self._mj_data, col, e)
+            M_full[:, i] = col
+        M_np = M_full[:self._arm_dof_dim, :self._arm_dof_dim].copy()
 
         # Rotation matrix straight from MuJoCo's xmat, which sidesteps the unresolved question of
         # whether Genesis get_quat() is (w,x,y,z) or (x,y,z,w).

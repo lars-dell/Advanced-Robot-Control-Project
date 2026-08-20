@@ -87,6 +87,7 @@ class QPImpedanceController(BaseController):
         self.n_violations = 0
         self.n_solves = 0
         self.max_violation = 0.0
+        self.n_qp_failures = 0
 
         # Instantiate pre-compiled parametric CasADi QP solver module
         self.qp_solver = CasADiQPSolver(n_vars=self.n_dofs, use_qpoases=self.use_qpoases)
@@ -115,6 +116,29 @@ class QPImpedanceController(BaseController):
             np.ndarray: Optimal decision variable vector x of shape (n_vars,).
         """
         return self.qp_solver.solve(H=H, g=g, lb=lb, ub=ub, A_eq=A_eq, b_eq=b_eq)
+
+    def _is_feasible(
+        self,
+        tau: np.ndarray,
+        lb: np.ndarray,
+        ub: np.ndarray,
+        A_eq: Optional[np.ndarray],
+        b_eq: Optional[np.ndarray],
+        tol: float = 1e-6
+    ) -> bool:
+        """
+        Check a QP solution against its own bounds and equality constraints.
+
+        The solver does not raise on failure, so this is the only way to know whether the returned
+        vector is a solution or a fallback.
+        """
+        if tau is None or tau.shape != lb.shape or not np.all(np.isfinite(tau)):
+            return False
+        if np.any(tau < lb - tol) or np.any(tau > ub + tol):
+            return False
+        if A_eq is not None and np.linalg.norm(A_eq @ tau - b_eq) > 1e-4 * max(1.0, np.linalg.norm(b_eq)):
+            return False
+        return True
 
     def compute_torques(
         self,
@@ -217,6 +241,7 @@ class QPImpedanceController(BaseController):
         prev_b_eq_list = []
         level_torques: list = []
         tau_opt = np.zeros(n_dofs, dtype=np.float64)
+        tau_fallback = np.clip(np.zeros(n_dofs, dtype=np.float64), lb, ub)
 
         for level, (task, J_i, f_i) in enumerate(evaluated_tasks):
             # Mapping matrix M_i = J_i * B^(-1), shape (m_i, n_dofs)
@@ -243,7 +268,26 @@ class QPImpedanceController(BaseController):
                 A_eq = None
                 b_eq = None
 
-            tau_opt = self.qp_solver.solve(H=H_i, g=g_i, lb=lb, ub=ub, A_eq=A_eq, b_eq=b_eq)
+            tau_i = self.qp_solver.solve(H=H_i, g=g_i, lb=lb, ub=ub, A_eq=A_eq, b_eq=b_eq)
+
+            # Validate before trusting it. The solver is configured with error_on_fail=False and
+            # returns zeros from its exception handler, and zero is NOT a feasible point when the
+            # bounds are shifted far from the origin by a large feed-forward h. Accepting it
+            # silently destroys both the torque guarantee and the priority ordering.
+            #
+            # tau_fallback is always feasible: at level 0 it is the origin projected into the box,
+            # and afterwards it is the previous level's optimum, which satisfies this level's bounds
+            # and every equality constraint carried into it by construction.
+            if not self._is_feasible(tau_i, lb, ub, A_eq, b_eq):
+                self.n_qp_failures += 1
+                if self.n_qp_failures <= 5:
+                    logger.warning(
+                        f"QP at priority level {level} returned an infeasible point; "
+                        f"falling back to the last feasible solution"
+                    )
+                tau_i = tau_fallback
+            tau_opt = tau_i
+            tau_fallback = tau_opt.copy()
 
             # Carry this level's optimum forward as a constraint on all lower levels.
             prev_A_eq_list.append(M_i)

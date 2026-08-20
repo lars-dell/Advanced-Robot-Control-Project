@@ -18,7 +18,7 @@ class CasADiQPSolver:
     and Level 1+ (constrained priority equality) QPs during initialization.
     """
 
-    def __init__(self, n_vars: int = 7, use_qpoases: bool = True) -> None:
+    def __init__(self, n_vars: int = 7, use_qpoases: bool = True, solver_name: str = None) -> None:
         """
         Initialize the CasADi QP Solver Engine.
 
@@ -28,6 +28,18 @@ class CasADiQPSolver:
         """
         self.n_vars = n_vars
         self.use_qpoases = use_qpoases
+        # Explicit override wins; otherwise qpOASES (the paper's solver) or OSQP.
+        # qpOASES by default -- the solver Hoffman et al. use.
+        #
+        # It is an active-set method that warm-starts from its previous working set, so calling it
+        # twice with the SAME problem can return answers differing by ~1e-13. That does not occur
+        # in a control loop, which presents a sequence of different problems: two runs replaying
+        # the same sequence drive the internal state identically and produce bit-identical
+        # trajectories. Verified across all three scenarios.
+        #
+        # Other CasADi conic plugins are selectable by name for comparison; DAQP is stateless and
+        # was checked as an alternative, and gives the same trajectories as qpOASES here.
+        self.solver_name = solver_name or ("qpoases" if use_qpoases else "osqp")
 
         # Registry for compiled parametric solver functions keyed by equality constraint dimension eq_dim
         self._compiled_solvers: Dict[int, Dict[str, Any]] = {}
@@ -73,12 +85,12 @@ class CasADiQPSolver:
             inputs = [H_p, g_p, lb_p, ub_p]
 
         # Configure solver backend (qpOASES or OSQP)
-        solver_name = "qpoases" if self.use_qpoases else "osqp"
+        solver_name = self.solver_name
         opts = {
             "printLevel": "none",
             "print_time": False,
             "error_on_fail": False,
-        } if self.use_qpoases else {
+        } if solver_name == "qpoases" else {"print_time": False, "error_on_fail": False} if solver_name == "daqp" else {
             "error_on_fail": False,
             "print_time": False,
             "osqp": {"verbose": False}
