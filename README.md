@@ -162,7 +162,7 @@ uv run python main.py --no-markers
 
 ### Scenarios
 
-`--scenario` selects the priority hierarchy. All three use the same controller.
+`--experiment` (alias `--exp`) selects the priority hierarchy or experiment benchmark (default: `reach`). All use the same controller.
 
 | Scenario | Priority levels | Reference | Purpose |
 | :--- | :--- | :--- | :--- |
@@ -285,10 +285,9 @@ Notes:
 | `--device` | `str` | `cpu` | Genesis physics backend (`cpu` or `gpu`). |
 | `--no-markers` | `flag` | `False` | Disable the goal, error-line, disturbance and trail overlays. |
 | `--out` | `str` | `results/run.npz` | Destination file for the telemetry log. |
-| `--scenario` | `str` | `reach` | Task hierarchy to run (`reach`, `reach_split`, `conflict`). |
+| `--experiment`, `--exp` | `str` | `reach` | Experiment or priority scenario to run: scenarios (`reach`, `reach_split`, `conflict`) or benchmark suite (`surface_circle`, `blocked_circle`, `apf_avoidance`, `multilink_push`, `torque_wipe`, `singularity`, `baseline_comparison`, `bode`, `passivity`, `robustness`, `benchmark`, `all`). |
 | `--priority-order` | `str` | `xyz` | Axis ranking in `conflict`, highest priority first (e.g. `xyz`, `zyx`). |
 | `--record` | `str` | `None` | Record the run to a file, e.g. `docs/media/run.gif`. |
-| `--experiment` | `str` | `default` | Run experiment benchmark (`surface_circle`, `blocked_circle`, `apf_avoidance`, `multilink_push`, `torque_wipe`, `singularity`, `baseline_comparison`, `bode`, `passivity`, `robustness`, `benchmark`, `all`). |
 
 ---
 
