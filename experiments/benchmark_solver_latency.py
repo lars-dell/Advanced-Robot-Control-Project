@@ -56,7 +56,7 @@ def run_latency_benchmark(
         kd_cart=45.0,
         kp_null=20.0,
         kd_null=4.0,
-        use_qpoases=True
+        solver_name="daqp"
     )
 
     state = sim.get_state()

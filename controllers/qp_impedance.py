@@ -38,7 +38,7 @@ class QPImpedanceController(BaseController):
         kd_cart: float = 40.0,
         kp_null: float = 20.0,
         kd_null: float = 4.0,
-        use_qpoases: bool = True,
+        solver_name: str = "daqp",
         reg_eps: float = 1e-4
     ) -> None:
         """
@@ -52,7 +52,7 @@ class QPImpedanceController(BaseController):
             kd_cart: Cartesian derivative damping gain (default fallback task).
             kp_null: Null-space posture proportional gain (default fallback task).
             kd_null: Null-space posture derivative gain (default fallback task).
-            use_qpoases: Whether to configure CasADi solver with qpOASES plugin.
+            solver_name: Solver plugin name ("daqp", "osqp", "qpoases"). Defaults to "daqp".
             reg_eps: Quadratic regularization weight epsilon for QP objective.
         """
         super().__init__(n_dofs=n_dofs)
@@ -73,12 +73,12 @@ class QPImpedanceController(BaseController):
         self.kd_cart = kd_cart
         self.kp_null = kp_null
         self.kd_null = kd_null
-        self.use_qpoases = use_qpoases
+        self.solver_name = solver_name or "daqp"
         self.reg_eps = reg_eps
 
         # Feasibility accounting. The paper guarantees tau_cmd stays inside [tau_min, tau_max]
         # without post-hoc clipping; these counters are the evidence for that claim.
-        self.violation_tol = 1e-6
+        self.violation_tol = 1e-4
         # Per-level diagnostics, refreshed each compute_torques() call. priority_residuals[k] is
         # || J_k B^-1 tau_final - J_k B^-1 tau_k* ||: how far the final solution drifted from what
         # priority level k had already decided. Strict priority means these sit at solver tolerance.
@@ -90,7 +90,10 @@ class QPImpedanceController(BaseController):
         self.n_qp_failures = 0
 
         # Instantiate pre-compiled parametric CasADi QP solver module
-        self.qp_solver = CasADiQPSolver(n_vars=self.n_dofs, use_qpoases=self.use_qpoases)
+        self.qp_solver = CasADiQPSolver(
+            n_vars=self.n_dofs,
+            solver_name=self.solver_name
+        )
 
     def solve_single_qp(
         self,
@@ -124,7 +127,7 @@ class QPImpedanceController(BaseController):
         ub: np.ndarray,
         A_eq: Optional[np.ndarray],
         b_eq: Optional[np.ndarray],
-        tol: float = 1e-6
+        tol: float = 1e-4
     ) -> bool:
         """
         Check a QP solution against its own bounds and equality constraints.

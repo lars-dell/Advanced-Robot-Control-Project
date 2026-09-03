@@ -54,6 +54,13 @@ def main() -> None:
         help="Priority ranking of Cartesian axes in 'conflict' scenario (e.g. 'xyz' or 'zyx')"
     )
     parser.add_argument(
+        "--solver",
+        type=str,
+        default="daqp",
+        choices=["daqp", "osqp", "qpoases"],
+        help="QP solver backend engine plugin (default: 'daqp', choices: 'daqp', 'osqp', 'qpoases')"
+    )
+    parser.add_argument(
         "--scenario",
         type=str,
         default=None,
@@ -129,7 +136,8 @@ def main() -> None:
             device=args.device,
             out_path=out_path,
             show_markers=show_markers,
-            record_path=args.record
+            record_path=args.record,
+            solver=args.solver
         )
     elif scenario == "reach_split":
         sim_time = args.time if args.time is not None else 5.0
@@ -141,7 +149,8 @@ def main() -> None:
             device=args.device,
             out_path=out_path,
             show_markers=show_markers,
-            record_path=args.record
+            record_path=args.record,
+            solver=args.solver
         )
     elif scenario == "conflict":
         sim_time = args.time if args.time is not None else 7.0
@@ -155,7 +164,8 @@ def main() -> None:
             device=args.device,
             out_path=out_path,
             show_markers=show_markers,
-            record_path=args.record
+            record_path=args.record,
+            solver=args.solver
         )
 
 

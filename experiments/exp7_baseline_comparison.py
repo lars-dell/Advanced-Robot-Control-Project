@@ -46,9 +46,9 @@ def build_controller(control_mode: str) -> BaseController:
     elif control_mode == "saturated_algebraic":
         return SaturatedAlgebraicController(n_dofs=7, reg_pinv=1e-4)
     elif control_mode == "weighted_qp":
-        return WeightedQPController(n_dofs=7, weights=[1.0, 0.3], use_qpoases=True, reg_eps=1e-4)
+        return WeightedQPController(n_dofs=7, weights=[1.0, 0.3], solver_name="daqp", reg_eps=1e-4)
     elif control_mode == "hierarchical_qp":
-        return QPImpedanceController(n_dofs=7, use_qpoases=True, reg_eps=1e-4)
+        return QPImpedanceController(n_dofs=7, solver_name="daqp", reg_eps=1e-4)
     else:
         raise ValueError(f"Unknown control mode: {control_mode}")
 

@@ -60,7 +60,7 @@ def run_experiment_6(
         kp_null=20.0,
         kd_null=4.0,
         reg_eps=1e-4,
-        use_qpoases=True
+        solver_name="daqp"
     )
 
     state = sim.get_state()

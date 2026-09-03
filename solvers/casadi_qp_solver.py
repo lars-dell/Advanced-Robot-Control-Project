@@ -18,28 +18,16 @@ class CasADiQPSolver:
     and Level 1+ (constrained priority equality) QPs during initialization.
     """
 
-    def __init__(self, n_vars: int = 7, use_qpoases: bool = True, solver_name: str = None) -> None:
+    def __init__(self, n_vars: int = 7, solver_name: str = "daqp") -> None:
         """
         Initialize the CasADi QP Solver Engine.
 
         Args:
             n_vars: Number of decision variables (default: 7 for robot joints).
-            use_qpoases: Whether to use qpOASES solver plugin (default: True, fallback: OSQP).
+            solver_name: Solver plugin name ("daqp", "osqp", "qpoases"). Defaults to "daqp".
         """
         self.n_vars = n_vars
-        self.use_qpoases = use_qpoases
-        # Explicit override wins; otherwise qpOASES (the paper's solver) or OSQP.
-        # qpOASES by default -- the solver Hoffman et al. use.
-        #
-        # It is an active-set method that warm-starts from its previous working set, so calling it
-        # twice with the SAME problem can return answers differing by ~1e-13. That does not occur
-        # in a control loop, which presents a sequence of different problems: two runs replaying
-        # the same sequence drive the internal state identically and produce bit-identical
-        # trajectories. Verified across all three scenarios.
-        #
-        # Other CasADi conic plugins are selectable by name for comparison; DAQP is stateless and
-        # was checked as an alternative, and gives the same trajectories as qpOASES here.
-        self.solver_name = solver_name or ("qpoases" if use_qpoases else "osqp")
+        self.solver_name = solver_name or "daqp"
 
         # Registry for compiled parametric solver functions keyed by equality constraint dimension eq_dim
         self._compiled_solvers: Dict[int, Dict[str, Any]] = {}
@@ -84,17 +72,31 @@ class CasADiQPSolver:
         else:
             inputs = [H_p, g_p, lb_p, ub_p]
 
-        # Configure solver backend (qpOASES or OSQP)
+        # Configure solver backend (DAQP, qpOASES, or OSQP)
         solver_name = self.solver_name
-        opts = {
-            "printLevel": "none",
-            "print_time": False,
-            "error_on_fail": False,
-        } if solver_name == "qpoases" else {"print_time": False, "error_on_fail": False} if solver_name == "daqp" else {
-            "error_on_fail": False,
-            "print_time": False,
-            "osqp": {"verbose": False}
-        }
+        if solver_name == "qpoases":
+            opts = {
+                "printLevel": "none",
+                "print_time": False,
+                "error_on_fail": False,
+            }
+        elif solver_name == "daqp":
+            opts = {
+                "print_time": False,
+                "error_on_fail": False,
+            }
+        else:
+            # OSQP backend with high accuracy and active-set polishing
+            opts = {
+                "error_on_fail": False,
+                "print_time": False,
+                "osqp": {
+                    "verbose": False,
+                    "polish": True,
+                    "eps_abs": 1e-7,
+                    "eps_rel": 1e-7,
+                }
+            }
 
         try:
             opti.solver(solver_name, opts)
@@ -104,8 +106,17 @@ class CasADiQPSolver:
                 "eq_dim": eq_dim
             }
         except Exception as e:
-            logger.warning(f"Failed to pre-compile qpOASES for eq_dim={eq_dim}: {e}. Retrying OSQP backend.")
-            opts_fb = {"error_on_fail": False, "print_time": False, "osqp": {"verbose": False}}
+            logger.warning(f"Failed to pre-compile {solver_name} for eq_dim={eq_dim}: {e}. Retrying OSQP backend.")
+            opts_fb = {
+                "error_on_fail": False,
+                "print_time": False,
+                "osqp": {
+                    "verbose": False,
+                    "polish": True,
+                    "eps_abs": 1e-7,
+                    "eps_rel": 1e-7,
+                }
+            }
             opti.solver("osqp", opts_fb)
             solver_fn = opti.to_function(f"qp_solver_{eq_dim}_osqp", inputs, [x])
             self._compiled_solvers[eq_dim] = {
@@ -151,7 +162,11 @@ class CasADiQPSolver:
                 res = solver_fn(H, g, lb, ub, A_eq, b_eq)
             else:
                 res = solver_fn(H, g, lb, ub)
-            return np.array(res, dtype=np.float64).flatten()
+            x_opt = np.array(res, dtype=np.float64).flatten()
+            # Cleanly project minor floating-point solver tolerances (e.g. 1e-5) back onto box bounds
+            if lb is not None and ub is not None:
+                x_opt = np.clip(x_opt, lb, ub)
+            return x_opt
         except Exception as e:
             logger.error(f"Pre-compiled QP solver evaluation failed for eq_dim={eq_dim}: {e}")
             return np.zeros(self.n_vars, dtype=np.float64)

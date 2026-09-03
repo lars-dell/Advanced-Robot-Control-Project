@@ -40,7 +40,8 @@ def run_reach_split(
     out_path: str = "results/reach_split.npz",
     show_markers: bool = True,
     record_path: Optional[str] = None,
-    save_plot: bool = True
+    save_plot: bool = True,
+    solver: str = "daqp"
 ) -> Dict[str, np.ndarray]:
     """
     Executes the decomposed 1-D Cartesian reaching scenario.
@@ -54,12 +55,13 @@ def run_reach_split(
         show_markers: Whether to render debug overlays.
         record_path: Optional path to save recording.
         save_plot: Whether to generate diagnostic figures.
+        solver: QP solver backend engine ("daqp", "osqp", "qpoases").
 
     Returns:
         Dict[str, np.ndarray]: Telemetry logs.
     """
     logger.info("=================================================================")
-    logger.info("Running Scenario: Decomposed 1-D Prioritized Reaching (Reach Split)")
+    logger.info(f"Running Scenario: Decomposed 1-D Prioritized Reaching (Reach Split) [Solver: {solver}]")
     logger.info("=================================================================")
 
     sim = GenesisSim(
@@ -77,7 +79,7 @@ def run_reach_split(
         kd_cart=40.0,
         kp_null=20.0,
         kd_null=4.0,
-        use_qpoases=True,
+        solver_name=solver,
         reg_eps=1e-4
     )
 

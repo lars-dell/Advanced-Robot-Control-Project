@@ -36,7 +36,8 @@ def run_reach(
     out_path: str = "results/reach.npz",
     show_markers: bool = True,
     record_path: Optional[str] = None,
-    save_plot: bool = True
+    save_plot: bool = True,
+    solver: str = "daqp"
 ) -> Dict[str, np.ndarray]:
     """
     Executes the single-objective Cartesian reaching scenario.
@@ -50,12 +51,13 @@ def run_reach(
         show_markers: Whether to render debug overlays.
         record_path: Optional path to save recording (e.g. docs/media/reach.gif).
         save_plot: Whether to generate diagnostic figures.
+        solver: QP solver backend engine ("daqp", "osqp", "qpoases").
 
     Returns:
         Dict[str, np.ndarray]: Telemetry logs.
     """
     logger.info("=================================================================")
-    logger.info("Running Scenario: Single-Objective Cartesian Reaching (Reach)")
+    logger.info(f"Running Scenario: Single-Objective Cartesian Reaching (Reach) [Solver: {solver}]")
     logger.info("=================================================================")
 
     sim = GenesisSim(
@@ -73,7 +75,7 @@ def run_reach(
         kd_cart=40.0,
         kp_null=20.0,
         kd_null=4.0,
-        use_qpoases=True,
+        solver_name=solver,
         reg_eps=1e-4
     )
 

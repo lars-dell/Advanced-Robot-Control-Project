@@ -70,7 +70,7 @@ def run_experiment_1(
         kd_cart=40.0,
         kp_null=20.0,
         kd_null=4.0,
-        use_qpoases=True
+        solver_name="daqp"
     )
 
     # State extraction & trajectory setup

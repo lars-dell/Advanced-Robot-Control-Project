@@ -40,7 +40,8 @@ def run_conflict(
     out_path: Optional[str] = None,
     show_markers: bool = True,
     record_path: Optional[str] = None,
-    save_plot: bool = True
+    save_plot: bool = True,
+    solver: str = "daqp"
 ) -> Dict[str, np.ndarray]:
     """
     Executes the conflicting priority scenario under the specified hierarchy order.
@@ -55,6 +56,7 @@ def run_conflict(
         show_markers: Whether to render goal/error debug overlays.
         record_path: Optional path to record GIF/video.
         save_plot: Whether to generate diagnostic plots.
+        solver: QP solver backend engine ("daqp", "osqp", "qpoases").
 
     Returns:
         Dict[str, np.ndarray]: Recorded telemetry data.
@@ -64,7 +66,7 @@ def run_conflict(
     out_file = out_path or default_out
 
     logger.info("=================================================================")
-    logger.info(f"Running Scenario: Conflicting Objectives (Order: {' > '.join(priority_order)})")
+    logger.info(f"Running Scenario: Conflicting Objectives (Order: {' > '.join(priority_order)}) [Solver: {solver}]")
     logger.info("=================================================================")
 
     sim = GenesisSim(
@@ -82,7 +84,7 @@ def run_conflict(
         kd_cart=60.0,
         kp_null=20.0,
         kd_null=10.0,
-        use_qpoases=True,
+        solver_name=solver,
         reg_eps=1e-2
     )
 

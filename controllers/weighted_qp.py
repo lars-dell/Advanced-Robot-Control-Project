@@ -38,7 +38,7 @@ class WeightedQPController(BaseController):
         kp_null: float = 20.0,
         kd_null: float = 4.0,
         weights: Optional[List[float]] = None,
-        use_qpoases: bool = True,
+        solver_name: str = "daqp",
         reg_eps: float = 1e-4
     ) -> None:
         """
@@ -53,7 +53,7 @@ class WeightedQPController(BaseController):
             kp_null: Joint posture stiffness gain.
             kd_null: Joint posture damping gain.
             weights: List of weighting factors per task priority level (default: [1.0, 0.1, 0.01]).
-            use_qpoases: Whether to use qpOASES solver plugin.
+            solver_name: Solver plugin name ("daqp", "osqp", "qpoases"). Defaults to "daqp".
             reg_eps: Regularization factor.
         """
         super().__init__(n_dofs=n_dofs)
@@ -73,11 +73,14 @@ class WeightedQPController(BaseController):
         self.kp_null = kp_null
         self.kd_null = kd_null
         self.weights = weights if weights is not None else [1.0, 0.1, 0.01]
-        self.use_qpoases = use_qpoases
+        self.solver_name = solver_name or "daqp"
         self.reg_eps = reg_eps
 
         # CasADi solver engine
-        self.qp_solver = CasADiQPSolver(n_vars=self.n_dofs, use_qpoases=self.use_qpoases)
+        self.qp_solver = CasADiQPSolver(
+            n_vars=self.n_dofs,
+            solver_name=self.solver_name
+        )
 
     def compute_torques(
         self,

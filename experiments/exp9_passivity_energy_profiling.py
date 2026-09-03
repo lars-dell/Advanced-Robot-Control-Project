@@ -59,7 +59,7 @@ def run_experiment_9(
         kd_cart=kd_cart,
         kp_null=kp_null,
         kd_null=kd_null,
-        use_qpoases=True
+        solver_name="daqp"
     )
 
     state = sim.get_state()
