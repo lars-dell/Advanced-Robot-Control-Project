@@ -92,7 +92,12 @@ class GenesisSim:
         record_fps: int = 12,
         boxes: Optional[List[Dict]] = None,
         spheres: Optional[List[Dict]] = None,
-        goal_sphere_cfg: Optional[Dict] = None
+        goal_sphere_cfg: Optional[Dict] = None,
+        surface_box: Optional[Dict[str, Any]] = None,
+        obstacle_box: Optional[Dict[str, Any]] = None,
+        obstacle_sphere: Optional[Dict[str, Any]] = None,
+        goal_sphere: Optional[Dict[str, Any]] = None,
+        **kwargs: Any
     ) -> None:
         """
         Initialize the Genesis simulation wrapper.
@@ -109,6 +114,10 @@ class GenesisSim:
             boxes: Optional list of box dictionaries [{'pos': [x,y,z], 'size': [dx,dy,dz], 'color': [r,g,b]}].
             spheres: Optional list of sphere dictionaries [{'pos': [x,y,z], 'radius': r, 'color': [r,g,b]}].
             goal_sphere_cfg: Optional configuration dict for target goal marker.
+            surface_box: Optional dict with 'pos', 'size' for spawning a base surface box.
+            obstacle_box: Optional dict with 'pos', 'size' for spawning an obstacle box.
+            obstacle_sphere: Optional dict with 'pos', 'radius' for spawning an obstacle sphere.
+            goal_sphere: Optional alias for goal_sphere_cfg.
         """
         self.model_xml = model_xml
         self.ee_link_name = ee_link_name
@@ -116,13 +125,42 @@ class GenesisSim:
         self.dt = dt
         self.device = device
         self.n_envs = 1
-        self.boxes = boxes
-        self.spheres = spheres
-        self.goal_sphere_cfg = goal_sphere_cfg
+
+        self.surface_box_cfg = surface_box
+        self.obstacle_box_cfg = obstacle_box
+        self.obstacle_sphere_cfg = obstacle_sphere
+        self.goal_sphere_cfg = goal_sphere if goal_sphere is not None else goal_sphere_cfg
+
+        # Combine explicit boxes list with optional convenience entities
+        box_list = list(boxes) if boxes is not None else []
+        if surface_box is not None:
+            sb = dict(surface_box)
+            sb.setdefault("color", (0.8, 0.8, 0.8))
+            sb.setdefault("collision", True)
+            box_list.append(sb)
+        if obstacle_box is not None:
+            ob = dict(obstacle_box)
+            ob.setdefault("color", (0.9, 0.2, 0.2))
+            ob.setdefault("collision", True)
+            box_list.append(ob)
+        self.boxes = box_list if box_list else None
+
+        # Combine explicit spheres list with optional convenience entities
+        sph_list = list(spheres) if spheres is not None else []
+        if obstacle_sphere is not None:
+            os_cfg = dict(obstacle_sphere)
+            os_cfg.setdefault("color", (1.0, 0.4, 0.0))
+            os_cfg.setdefault("collision", True)
+            sph_list.append(os_cfg)
+        self.spheres = sph_list if sph_list else None
 
         self.scene: Optional[gs.Scene] = None
         self.robot: Optional[gs.Entity] = None
         self.plane: Optional[gs.Entity] = None
+        self.surface_box: Optional[gs.Entity] = None
+        self.obstacle_box: Optional[gs.Entity] = None
+        self.obstacle_sphere: Optional[gs.Entity] = None
+        self.goal_sphere: Optional[gs.Entity] = None
 
         self._arm_dof_dim = 7
         self._f_ext = np.zeros(3, dtype=np.float64)  # pending external disturbance, world frame
@@ -194,6 +232,8 @@ class GenesisSim:
         self.plane = self.scene.add_entity(gs.morphs.Plane())
 
         # Add optional custom box obstacles / contact surfaces
+        self.surface_box = None
+        self.obstacle_box = None
         if self.boxes is not None:
             for b_cfg in self.boxes:
                 b_pos = b_cfg.get("pos", (0.5, 0.0, 0.2))
@@ -201,13 +241,18 @@ class GenesisSim:
                 b_col = b_cfg.get("color", (0.8, 0.8, 0.8))
                 b_collision = b_cfg.get("collision", True)
                 b_vis_contact = b_cfg.get("visualize_contact", b_collision)
-                self.scene.add_entity(
+                b_ent = self.scene.add_entity(
                     gs.morphs.Box(pos=b_pos, size=b_size, fixed=True, collision=b_collision),
                     surface=gs.surfaces.Rough(diffuse_texture=gs.textures.ColorTexture(color=b_col)),
                     visualize_contact=b_vis_contact
                 )
+                if self.surface_box_cfg is not None and b_cfg.get("pos") == self.surface_box_cfg.get("pos"):
+                    self.surface_box = b_ent
+                elif self.obstacle_box_cfg is not None and b_cfg.get("pos") == self.obstacle_box_cfg.get("pos"):
+                    self.obstacle_box = b_ent
 
         # Add optional custom spherical obstacles
+        self.obstacle_sphere = None
         if self.spheres is not None:
             for s_cfg in self.spheres:
                 sph_pos = s_cfg.get("pos", (0.45, 0.0, 0.45))
@@ -215,11 +260,13 @@ class GenesisSim:
                 sph_col = s_cfg.get("color", (1.0, 0.4, 0.0))
                 sph_collision = s_cfg.get("collision", True)
                 sph_vis_contact = s_cfg.get("visualize_contact", sph_collision)
-                self.scene.add_entity(
+                s_ent = self.scene.add_entity(
                     gs.morphs.Sphere(pos=sph_pos, radius=sph_radius, fixed=True, collision=sph_collision),
                     surface=gs.surfaces.Rough(diffuse_texture=gs.textures.ColorTexture(color=sph_col)),
                     visualize_contact=sph_vis_contact
                 )
+                if self.obstacle_sphere_cfg is not None and s_cfg.get("pos") == self.obstacle_sphere_cfg.get("pos"):
+                    self.obstacle_sphere = s_ent
 
         # Resolve robot XML so its meshes are findable, then load. No fallback: a missing model
         # must fail loudly rather than silently substituting a different robot.
@@ -241,6 +288,7 @@ class GenesisSim:
                 gs.morphs.Sphere(pos=goal_pos, radius=goal_radius, fixed=True, collision=False),
                 surface=gs.surfaces.Emission(color=(0.0, 1.0, 0.0))
             )
+            self.goal_sphere = self.goal_marker
         elif self.show_markers and (self.show_viewer or self.record_path is not None):
             self.goal_marker = self.scene.add_entity(
                 gs.morphs.Sphere(
@@ -249,8 +297,11 @@ class GenesisSim:
                     collision=False,
                     batch_fixed_verts=True,
                 ),
-                surface=gs.surfaces.Emission(color=(0.0, 1.0, 0.0)),
+                surface=gs.surfaces.Emission(color=(0.1, 0.85, 0.25)),
             )
+            self.goal_sphere = self.goal_marker
+        else:
+            self.goal_sphere = None
 
         # Recording camera, added before build() like every other entity.
         if self.record_path is not None:
@@ -430,6 +481,8 @@ class GenesisSim:
             link_name: Target link name (default: 'hand').
         """
         link = self.robot.get_link(link_name)
+        if link is None and link_name in ["hand", "ee", "ee_link", "tool"]:
+            link = self.robot.get_link(self.ee_link_name)
         if link is not None and hasattr(self.scene, "rigid_solver"):
             f_tensor = torch.zeros((self.scene.rigid_solver.n_links, 3), dtype=gs.tc_float, device=gs.device)
             f_tensor[link.idx] = torch.tensor(force, dtype=gs.tc_float, device=gs.device)
