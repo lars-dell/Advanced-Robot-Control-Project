@@ -33,7 +33,8 @@ def evaluate_frequency_response(
     use_full_impedance: bool,
     sim_time: float = 6.0,
     dt: float = 0.005,
-    device: str = "cpu"
+    device: str = "cpu",
+    sim: Any = None
 ) -> Dict[str, Any]:
     """
     Executes a sinusoidal trajectory tracking test at a specific excitation frequency.
@@ -44,16 +45,20 @@ def evaluate_frequency_response(
         sim_time: Total simulation time in seconds.
         dt: Control timestep in seconds.
         device: 'cpu' or 'gpu'.
+        sim: Optional existing GenesisSim instance to reuse.
 
     Returns:
         Dict[str, Any]: Telemetry and frequency response metrics.
     """
-    sim = GenesisSim(
-        model_xml="panda_cylinder.xml",
-        show_viewer=False,
-        dt=dt,
-        device=device
-    )
+    if sim is None:
+        sim = GenesisSim(
+            model_xml="panda_cylinder.xml",
+            show_viewer=False,
+            dt=dt,
+            device=device
+        )
+    else:
+        sim.reset()
 
     controller = QPImpedanceController(
         n_dofs=7,
@@ -184,6 +189,12 @@ def run_experiment_8(
 
     results_vmc: List[Dict[str, Any]] = []
     results_full: List[Dict[str, Any]] = []
+    sim = GenesisSim(
+        model_xml="panda_cylinder.xml",
+        show_viewer=False,
+        dt=dt,
+        device=device
+    )
 
     for f in frequencies:
         logger.info(f"Testing Frequency f = {f:.2f} Hz | Virtual Model Control (VMC)...")
@@ -192,7 +203,8 @@ def run_experiment_8(
             use_full_impedance=False,
             sim_time=sim_time,
             dt=dt,
-            device=device
+            device=device,
+            sim=sim
         )
         results_vmc.append(res_v)
 
@@ -202,7 +214,8 @@ def run_experiment_8(
             use_full_impedance=True,
             sim_time=sim_time,
             dt=dt,
-            device=device
+            device=device,
+            sim=sim
         )
         results_full.append(res_f)
 
@@ -305,9 +318,13 @@ def main():
     parser.add_argument("--time", type=float, default=6.0, help="Simulation time per frequency in seconds")
     parser.add_argument("--dt", type=float, default=0.005, help="Simulation timestep in seconds")
     parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "gpu"], help="Physics backend")
+    parser.add_argument("--quick", action="store_true", help="Run reduced frequency set for rapid testing")
     args = parser.parse_args()
 
+    freqs = [0.5, 1.0, 2.0] if args.quick else [0.25, 0.5, 1.0, 2.0, 3.0]
+
     run_experiment_8(
+        frequencies=freqs,
         sim_time=args.time,
         dt=args.dt,
         device=args.device,

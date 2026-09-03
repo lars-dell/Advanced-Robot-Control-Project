@@ -31,7 +31,8 @@ def run_robustness_condition(
     condition_name: str,
     sim_time: float = 6.0,
     dt: float = 0.005,
-    device: str = "cpu"
+    device: str = "cpu",
+    sim: Any = None
 ) -> Dict[str, np.ndarray]:
     """
     Runs a single simulation run under a specified uncertainty/disturbance condition.
@@ -41,16 +42,20 @@ def run_robustness_condition(
         sim_time: Simulation time in seconds.
         dt: Control timestep in seconds.
         device: 'cpu' or 'gpu'.
+        sim: Optional existing GenesisSim instance to reuse.
 
     Returns:
         Dict[str, np.ndarray]: Telemetry log data.
     """
-    sim = GenesisSim(
-        model_xml="panda_cylinder.xml",
-        show_viewer=False,
-        dt=dt,
-        device=device
-    )
+    if sim is None:
+        sim = GenesisSim(
+            model_xml="panda_cylinder.xml",
+            show_viewer=False,
+            dt=dt,
+            device=device
+        )
+    else:
+        sim.reset()
 
     controller = QPImpedanceController(
         n_dofs=7,
@@ -171,6 +176,12 @@ def run_experiment_10(
     ]
 
     results: Dict[str, Any] = {}
+    sim = GenesisSim(
+        model_xml="panda_cylinder.xml",
+        show_viewer=False,
+        dt=dt,
+        device=device
+    )
 
     for key, desc in conditions:
         logger.info(f"Evaluating: {desc}...")
@@ -178,7 +189,8 @@ def run_experiment_10(
             condition_name=key,
             sim_time=sim_time,
             dt=dt,
-            device=device
+            device=device,
+            sim=sim
         )
         results[key] = res
         logger.info(f"[{key.upper()}] RMSE: {res['rmse']*1000:.2f}mm | Max Error: {res['max_err']*1000:.2f}mm | Max Torque: {res['max_tau']:.2f}Nm")

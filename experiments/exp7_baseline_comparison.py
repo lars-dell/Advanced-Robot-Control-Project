@@ -57,7 +57,8 @@ def run_single_controller_sim(
     control_mode: str,
     sim_time: float = 5.0,
     dt: float = 0.005,
-    device: str = "cpu"
+    device: str = "cpu",
+    sim: Any = None
 ) -> Dict[str, np.ndarray]:
     """
     Runs a single simulation run for the specified controller under conflicting task targets.
@@ -67,16 +68,20 @@ def run_single_controller_sim(
         sim_time: Duration in seconds (default: 5.0s).
         dt: Control timestep in seconds.
         device: 'cpu' or 'gpu'.
+        sim: Optional existing GenesisSim instance to reuse.
 
     Returns:
         Dict[str, np.ndarray]: Logged trajectory telemetry.
     """
-    sim = GenesisSim(
-        model_xml="panda_cylinder.xml",
-        show_viewer=False,
-        dt=dt,
-        device=device
-    )
+    if sim is None:
+        sim = GenesisSim(
+            model_xml="panda_cylinder.xml",
+            show_viewer=False,
+            dt=dt,
+            device=device
+        )
+    else:
+        sim.reset()
 
     controller: BaseController = build_controller(control_mode)
 
@@ -184,6 +189,12 @@ def run_experiment_7(
     ]
 
     all_results: Dict[str, Dict[str, np.ndarray]] = {}
+    sim = GenesisSim(
+        model_xml="panda_cylinder.xml",
+        show_viewer=False,
+        dt=dt,
+        device=device
+    )
 
     for mode_key, mode_title in modes:
         logger.info(f"Simulating: {mode_title}...")
@@ -191,7 +202,8 @@ def run_experiment_7(
             control_mode=mode_key,
             sim_time=sim_time,
             dt=dt,
-            device=device
+            device=device,
+            sim=sim
         )
         all_results[mode_key] = res
 

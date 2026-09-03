@@ -110,16 +110,27 @@ class CartesianPoseTask(BaseTask):
             v_curr = J_task @ dq
         else:
             J_task = J_full[:3, :]  # (3, n_dofs)
-            e_task = p_des - p_curr
             v_curr = J_task @ dq
+            p_des_arr = np.asarray(p_des, dtype=np.float64)
+            if self.axes is not None and p_des_arr.shape == (len(self.axes),):
+                e_task = p_des_arr - p_curr[self.axes]
+            else:
+                e_task = p_des - p_curr
 
-        v_err = v_des - v_curr
-
-        # Restrict to the controlled axes if requested
-        if self.axes is not None:
+        v_des_arr = np.asarray(v_des, dtype=np.float64)
+        if self.axes is not None and v_des_arr.shape == (len(self.axes),):
             J_task = J_task[self.axes, :]
-            e_task = e_task[self.axes]
-            v_err = v_err[self.axes]
+            if e_task.shape != (len(self.axes),):
+                e_task = e_task[self.axes]
+            v_curr = v_curr[self.axes]
+            v_err = v_des_arr - v_curr
+        else:
+            v_err = v_des_arr - v_curr
+            # Restrict to the controlled axes if requested
+            if self.axes is not None:
+                J_task = J_task[self.axes, :]
+                e_task = e_task[self.axes]
+                v_err = v_err[self.axes]
 
         if self.use_full_impedance:
             # Full Cartesian Impedance Law

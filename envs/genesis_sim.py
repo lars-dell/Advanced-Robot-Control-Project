@@ -199,12 +199,16 @@ class GenesisSim:
         """
         Initializes Genesis backend, creates scene, loads ground plane & robot, and builds the scene.
         """
-        # Initialize Genesis engine
-        if self.device == "gpu" and torch.cuda.is_available():
-            backend = gs.gpu
-        else:
-            backend = gs.cpu
-        gs.init(backend=backend, logging_level="warning")
+        # Initialize Genesis engine safely (only if not already initialized)
+        if not getattr(gs, "_initialized", False):
+            if self.device == "gpu" and torch.cuda.is_available():
+                backend = gs.gpu
+            else:
+                backend = gs.cpu
+            try:
+                gs.init(backend=backend, logging_level="warning")
+            except Exception:
+                pass
 
         # Create scene with rigid options
         self.scene = gs.Scene(
@@ -480,9 +484,16 @@ class GenesisSim:
             force: 3D force vector [Fx, Fy, Fz] in Newtons.
             link_name: Target link name (default: 'hand').
         """
-        link = self.robot.get_link(link_name)
-        if link is None and link_name in ["hand", "ee", "ee_link", "tool"]:
-            link = self.robot.get_link(self.ee_link_name)
+        if link_name in ["hand", "ee", "ee_link", "tool"]:
+            link_name = self.ee_link_name
+
+        link = None
+        if hasattr(self.robot, "links") and link_name in [l.name for l in self.robot.links]:
+            try:
+                link = self.robot.get_link(link_name)
+            except Exception:
+                link = None
+
         if link is not None and hasattr(self.scene, "rigid_solver"):
             f_tensor = torch.zeros((self.scene.rigid_solver.n_links, 3), dtype=gs.tc_float, device=gs.device)
             f_tensor[link.idx] = torch.tensor(force, dtype=gs.tc_float, device=gs.device)

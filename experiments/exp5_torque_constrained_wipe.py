@@ -152,7 +152,7 @@ def run_experiment_5(
         state = sim.get_state()
         p_des, v_des = generate_scurve_trajectory(t_curr, wipe_center)
         state["target_pos"] = p_des
-        state["target_vel"] = v_des[:2]
+        state["target_vel"] = v_des
 
         # Compute QP multi-priority torques
         torques = controller.compute_torques(state=state, target=task_stack, t=t_curr)
