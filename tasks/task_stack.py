@@ -40,10 +40,17 @@ class TaskStack:
         """
         Evaluates all tasks in the stack for the current state and time.
 
+        Filters out inactive tasks whose Jacobians have 0 rows.
+
         Returns:
-            List[Tuple[BaseTask, np.ndarray, np.ndarray]]: List of (task, J_i, f_i) ordered by priority.
+            List[Tuple[BaseTask, np.ndarray, np.ndarray]]: List of active (task, J_i, f_i) ordered by priority.
         """
-        return [(task, *task.compute(state, t)) for task in self.tasks]
+        evaluated = []
+        for task in self.tasks:
+            J_i, f_i = task.compute(state, t)
+            if J_i is not None and J_i.shape[0] > 0:
+                evaluated.append((task, J_i, f_i))
+        return evaluated
 
     def get_task_errors(self, state: Dict[str, np.ndarray]) -> Dict[str, float]:
         """

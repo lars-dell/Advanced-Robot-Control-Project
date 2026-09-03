@@ -199,10 +199,12 @@ class GenesisSim:
                 b_pos = b_cfg.get("pos", (0.5, 0.0, 0.2))
                 b_size = b_cfg.get("size", (0.5, 0.5, 0.4))
                 b_col = b_cfg.get("color", (0.8, 0.8, 0.8))
+                b_collision = b_cfg.get("collision", True)
+                b_vis_contact = b_cfg.get("visualize_contact", b_collision)
                 self.scene.add_entity(
-                    gs.morphs.Box(pos=b_pos, size=b_size, fixed=True),
+                    gs.morphs.Box(pos=b_pos, size=b_size, fixed=True, collision=b_collision),
                     surface=gs.surfaces.Rough(diffuse_texture=gs.textures.ColorTexture(color=b_col)),
-                    visualize_contact=True
+                    visualize_contact=b_vis_contact
                 )
 
         # Add optional custom spherical obstacles
@@ -211,10 +213,12 @@ class GenesisSim:
                 sph_pos = s_cfg.get("pos", (0.45, 0.0, 0.45))
                 sph_radius = s_cfg.get("radius", 0.08)
                 sph_col = s_cfg.get("color", (1.0, 0.4, 0.0))
+                sph_collision = s_cfg.get("collision", True)
+                sph_vis_contact = s_cfg.get("visualize_contact", sph_collision)
                 self.scene.add_entity(
-                    gs.morphs.Sphere(pos=sph_pos, radius=sph_radius, fixed=True),
+                    gs.morphs.Sphere(pos=sph_pos, radius=sph_radius, fixed=True, collision=sph_collision),
                     surface=gs.surfaces.Rough(diffuse_texture=gs.textures.ColorTexture(color=sph_col)),
-                    visualize_contact=True
+                    visualize_contact=sph_vis_contact
                 )
 
         # Resolve robot XML so its meshes are findable, then load. No fallback: a missing model

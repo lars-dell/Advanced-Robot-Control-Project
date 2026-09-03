@@ -59,6 +59,7 @@ Based on the paper:
 │   ├── exp8_frequency_bode_analysis.py # Exp 8: Frequency response & Bode bandwidth
 │   ├── exp9_passivity_energy_profiling.py # Exp 9: Energy tank & passivity profiling
 │   ├── exp10_parameter_robustness.py   # Exp 10: Model parameter uncertainty robustness
+│   ├── exp11_cartesian_corridor_circle.py # Exp 11: Prioritized Z-corridor & out-of-bounds circle
 │   └── benchmark_solver_latency.py     # Real-time solver latency profiling (< 0.5 ms @ 200 Hz)
 ├── utils/
 │   ├── __init__.py
@@ -310,6 +311,7 @@ uv run python main.py --experiment baseline_comparison  # Exp 7: 4-way baseline 
 uv run python main.py --experiment bode                 # Exp 8: Frequency response & Bode bandwidth
 uv run python main.py --experiment passivity            # Exp 9: Energy tank & passivity profiling
 uv run python main.py --experiment robustness           # Exp 10: Model parameter uncertainty robustness
+uv run python main.py --experiment corridor             # Exp 11: Prioritized Z-corridor & out-of-bounds circle
 uv run python main.py --experiment benchmark            # Solver latency profiling (< 0.5 ms)
 ```
 

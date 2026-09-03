@@ -23,6 +23,7 @@ from experiments import (
     run_experiment_8,
     run_experiment_9,
     run_experiment_10,
+    run_experiment_11,
     run_latency_benchmark,
 )
 
@@ -82,17 +83,21 @@ def main():
     run_experiment_9(sim_time=6.0 * scale, dt=0.005, show_viewer=False, device=device, save_plot=True)
 
     # Exp 10: Model Parameter Uncertainty & Robustness
-    logger.info("\n>>> [10/11] Running Exp 10: Model Parameter Robustness...")
+    logger.info("\n>>> [10/12] Running Exp 10: Model Parameter Robustness...")
     run_experiment_10(sim_time=6.0 * scale, dt=0.005, device=device, save_plot=True)
 
-    # Exp 11: Real-Time Solver Latency Benchmark
-    logger.info("\n>>> [11/11] Running Benchmark: Real-Time Solver Latency Profiling...")
+    # Exp 11: Prioritized Z-Corridor & Out-of-Bounds Circle
+    logger.info("\n>>> [11/12] Running Exp 11: Prioritized Z-Corridor & Out-of-Bounds Circle...")
+    run_experiment_11(sim_time=8.0 * scale, dt=0.005, show_viewer=False, device=device, save_plot=True)
+
+    # Exp 12: Real-Time Solver Latency Benchmark
+    logger.info("\n>>> [12/12] Running Benchmark: Real-Time Solver Latency Profiling...")
     steps = 500 if args.quick else 2000
     run_latency_benchmark(n_steps=steps, dt=0.005, device=device, save_plot=True)
 
     t_suite_total = time.perf_counter() - t_suite_start
     logger.info("\n================================================================================")
-    logger.info(f"  ALL 11 EVALUATION EXPERIMENTS COMPLETED IN {t_suite_total:.1f}s")
+    logger.info(f"  ALL 12 EVALUATION EXPERIMENTS COMPLETED IN {t_suite_total:.1f}s")
     logger.info("================================================================================")
 
 

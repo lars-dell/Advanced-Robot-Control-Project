@@ -28,6 +28,7 @@ from experiments import (
     run_experiment_8,
     run_experiment_9,
     run_experiment_10,
+    run_experiment_11,
     run_latency_benchmark,
 )
 
@@ -80,10 +81,15 @@ def main() -> None:
             "passivity",
             "robustness",
             "benchmark",
+            "corridor",
+            "z_bounds_circle",
+            "exp11",
             "all",
         ],
         help="Experiment or priority scenario selection (alias: --exp, default: 'reach')",
     )
+    parser.add_argument("--z-min", type=float, default=0.35, help="Lower height limit in meters (default: 0.35)")
+    parser.add_argument("--z-max", type=float, default=0.55, help="Upper height limit in meters (default: 0.55)")
     parser.add_argument(
         "--scenario",
         dest="experiment",
@@ -163,6 +169,21 @@ def main() -> None:
         run_experiment_10(sim_time=args.time or 6.0, dt=args.dt, device=args.device)
     elif exp == "benchmark":
         run_latency_benchmark(dt=args.dt, device=args.device)
+    elif exp in ("corridor", "z_bounds_circle", "exp11"):
+        sim_time = args.time if args.time is not None else 8.0
+        out_path = args.out or "results/exp11_corridor_circle.npz"
+        run_experiment_11(
+            sim_time=sim_time,
+            dt=args.dt,
+            show_viewer=show_viewer,
+            device=args.device,
+            z_min=args.z_min,
+            z_max=args.z_max,
+            out_path=out_path,
+            show_markers=show_markers,
+            record_path=args.record,
+            solver=args.solver,
+        )
     elif exp == "all":
         cmd = [sys.executable, "run_all_experiments.py", "--device", args.device]
         subprocess.run(cmd)

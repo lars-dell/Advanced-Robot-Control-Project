@@ -247,6 +247,9 @@ class QPImpedanceController(BaseController):
         tau_fallback = np.clip(np.zeros(n_dofs, dtype=np.float64), lb, ub)
 
         for level, (task, J_i, f_i) in enumerate(evaluated_tasks):
+            if J_i is None or J_i.shape[0] == 0:
+                continue
+
             # Mapping matrix M_i = J_i * B^(-1), shape (m_i, n_dofs)
             M_i = J_i @ B_inv
 

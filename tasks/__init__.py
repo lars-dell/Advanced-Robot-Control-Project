@@ -3,6 +3,7 @@ from tasks.cartesian_task import CartesianPoseTask
 from tasks.posture_task import JointPostureTask
 from tasks.force_task import CartesianForceTask, CircularTrajectoryGenerator
 from tasks.apf_task import APFRepulsiveTask
+from tasks.z_boundary_task import ZBoundaryTask
 from tasks.task_stack import TaskStack
 
 __all__ = [
@@ -12,5 +13,6 @@ __all__ = [
     "CartesianForceTask",
     "CircularTrajectoryGenerator",
     "APFRepulsiveTask",
+    "ZBoundaryTask",
     "TaskStack",
 ]
