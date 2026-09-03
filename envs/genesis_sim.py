@@ -89,7 +89,10 @@ class GenesisSim:
         ee_link_name: str = "tool_tip",
         show_markers: bool = True,
         record_path: Optional[str] = None,
-        record_fps: int = 12
+        record_fps: int = 12,
+        boxes: Optional[List[Dict]] = None,
+        spheres: Optional[List[Dict]] = None,
+        goal_sphere_cfg: Optional[Dict] = None
     ) -> None:
         """
         Initialize the Genesis simulation wrapper.
@@ -99,6 +102,13 @@ class GenesisSim:
             show_viewer: Whether to display interactive 3D viewer GUI window.
             dt: Simulation physics timestep in seconds (default: 0.005s / 200 Hz).
             device: Computing backend device ('cpu' or 'gpu').
+            ee_link_name: Name of the robot end-effector link (default: 'tool_tip').
+            show_markers: Whether to render debug overlays.
+            record_path: Optional video/GIF output path.
+            record_fps: Frame rate for video/GIF recording.
+            boxes: Optional list of box dictionaries [{'pos': [x,y,z], 'size': [dx,dy,dz], 'color': [r,g,b]}].
+            spheres: Optional list of sphere dictionaries [{'pos': [x,y,z], 'radius': r, 'color': [r,g,b]}].
+            goal_sphere_cfg: Optional configuration dict for target goal marker.
         """
         self.model_xml = model_xml
         self.ee_link_name = ee_link_name
@@ -106,6 +116,9 @@ class GenesisSim:
         self.dt = dt
         self.device = device
         self.n_envs = 1
+        self.boxes = boxes
+        self.spheres = spheres
+        self.goal_sphere_cfg = goal_sphere_cfg
 
         self.scene: Optional[gs.Scene] = None
         self.robot: Optional[gs.Entity] = None
@@ -180,6 +193,30 @@ class GenesisSim:
         # Add ground plane entity
         self.plane = self.scene.add_entity(gs.morphs.Plane())
 
+        # Add optional custom box obstacles / contact surfaces
+        if self.boxes is not None:
+            for b_cfg in self.boxes:
+                b_pos = b_cfg.get("pos", (0.5, 0.0, 0.2))
+                b_size = b_cfg.get("size", (0.5, 0.5, 0.4))
+                b_col = b_cfg.get("color", (0.8, 0.8, 0.8))
+                self.scene.add_entity(
+                    gs.morphs.Box(pos=b_pos, size=b_size, fixed=True),
+                    surface=gs.surfaces.Rough(diffuse_texture=gs.textures.ColorTexture(color=b_col)),
+                    visualize_contact=True
+                )
+
+        # Add optional custom spherical obstacles
+        if self.spheres is not None:
+            for s_cfg in self.spheres:
+                sph_pos = s_cfg.get("pos", (0.45, 0.0, 0.45))
+                sph_radius = s_cfg.get("radius", 0.08)
+                sph_col = s_cfg.get("color", (1.0, 0.4, 0.0))
+                self.scene.add_entity(
+                    gs.morphs.Sphere(pos=sph_pos, radius=sph_radius, fixed=True),
+                    surface=gs.surfaces.Rough(diffuse_texture=gs.textures.ColorTexture(color=sph_col)),
+                    visualize_contact=True
+                )
+
         # Resolve robot XML so its meshes are findable, then load. No fallback: a missing model
         # must fail loudly rather than silently substituting a different robot.
         self._resolved_xml = resolve_model(self.model_xml)
@@ -193,10 +230,14 @@ class GenesisSim:
 
         # Goal marker: emissive, massless, collision-free. Added after the robot so the robot's
         # link indices are untouched, and before build() as Genesis requires.
-        # Gated on the viewer too: with no viewer the entity is invisible but still costs scene
-        # setup time (~17% on a headless run). If offscreen camera rendering is added later, this
-        # condition must widen to include that case.
-        if self.show_markers and (self.show_viewer or self.record_path is not None):
+        if self.goal_sphere_cfg is not None:
+            goal_pos = self.goal_sphere_cfg.get("pos", (0.55, 0.20, 0.45))
+            goal_radius = self.goal_sphere_cfg.get("radius", 0.03)
+            self.goal_marker = self.scene.add_entity(
+                gs.morphs.Sphere(pos=goal_pos, radius=goal_radius, fixed=True, collision=False),
+                surface=gs.surfaces.Emission(color=(0.0, 1.0, 0.0))
+            )
+        elif self.show_markers and (self.show_viewer or self.record_path is not None):
             self.goal_marker = self.scene.add_entity(
                 gs.morphs.Sphere(
                     radius=0.02,
@@ -341,6 +382,9 @@ class GenesisSim:
             self._mj_data.xmat[self._mj_ee_body], dtype=np.float64
         ).reshape(3, 3).copy()
 
+        # End-effector contact force feedback
+        ee_force_np = self.get_ee_contact_force()
+
         return {
             "q": q_np,
             "dq": dq_np,
@@ -349,7 +393,46 @@ class GenesisSim:
             "h": h_np,
             "ee_pos": ee_pos_np,
             "ee_rot": ee_rot_np,
+            "ee_force": ee_force_np,
         }
+
+    def get_ee_contact_force(self) -> np.ndarray:
+        """
+        Extracts net contact force vector acting on the end-effector link in world frame.
+
+        Returns:
+            np.ndarray: 3D net contact force vector [Fx, Fy, Fz] in N.
+        """
+        if hasattr(self.robot, "get_links_net_contact_force"):
+            try:
+                F_links = _tensor_to_numpy(self.robot.get_links_net_contact_force())
+                ee_idx = getattr(self.ee_link, "idx_local", -1)
+                if ee_idx >= 0 and ee_idx < len(F_links):
+                    return F_links[ee_idx]
+            except Exception:
+                pass
+        return np.zeros(3, dtype=np.float64)
+
+    def apply_external_disturbance(
+        self,
+        force: np.ndarray,
+        link_name: str = "hand"
+    ) -> None:
+        """
+        Applies external disturbance force vector to a specific link of the robot.
+
+        Args:
+            force: 3D force vector [Fx, Fy, Fz] in Newtons.
+            link_name: Target link name (default: 'hand').
+        """
+        link = self.robot.get_link(link_name)
+        if link is not None and hasattr(self.scene, "rigid_solver"):
+            f_tensor = torch.zeros((self.scene.rigid_solver.n_links, 3), dtype=gs.tc_float, device=gs.device)
+            f_tensor[link.idx] = torch.tensor(force, dtype=gs.tc_float, device=gs.device)
+            self.scene.rigid_solver.apply_links_external_force(f_tensor)
+        else:
+            # Fallback to EE force injection
+            self.set_external_force(force)
 
     def apply_torques(self, torques: np.ndarray) -> None:
         """

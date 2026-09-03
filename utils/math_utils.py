@@ -84,10 +84,10 @@ def compute_orientation_error(
     R_des: np.ndarray
 ) -> np.ndarray:
     """
-    Computes 3D orientation error between current and desired rotation matrices.
+    Computes 3D orientation error between current and desired rotation matrices (target minus actual).
 
     Formula:
-        e_rot = 0.5 * vee(R_curr * R_des^T - R_des * R_curr^T)
+        e_rot = 0.5 * vee(R_des * R_curr^T - R_curr * R_des^T)
 
     Args:
         R_curr: Current 3x3 rotation matrix.
@@ -96,8 +96,8 @@ def compute_orientation_error(
     Returns:
         3D orientation error vector (skew-symmetric unwrap).
     """
-    R_err = R_curr @ R_des.T
-    # Skew-symmetric part extraction
+    R_err = R_des @ R_curr.T
+    # Skew-symmetric part extraction (vee operator)
     e_rot = 0.5 * np.array([
         R_err[2, 1] - R_err[1, 2],
         R_err[0, 2] - R_err[2, 0],
@@ -113,7 +113,7 @@ def compute_pose_error(
     R_des: np.ndarray
 ) -> np.ndarray:
     """
-    Computes 6D pose error vector (3D translational + 3D rotational error).
+    Computes 6D pose error vector (3D translational + 3D rotational error, target minus actual).
 
     Args:
         p_curr: Current position (3,).
@@ -124,6 +124,6 @@ def compute_pose_error(
     Returns:
         6D error vector e = [e_pos; e_rot] of shape (6,).
     """
-    e_pos = p_curr - p_des
+    e_pos = p_des - p_curr
     e_rot = compute_orientation_error(R_curr, R_des)
     return np.concatenate([e_pos, e_rot])

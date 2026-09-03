@@ -25,28 +25,50 @@ Based on the paper:
 
 ```
 .
-├── main.py                     # Entry point: simulation control loop, task hierarchy, telemetry logging
+├── main.py                     # Entry point: simulation control loop, scenarios & experiment benchmarks
+├── run_all_experiments.py      # Master benchmark runner executing all 10 evaluation experiments
 ├── pyproject.toml              # Project metadata & dependencies (genesis-world, casadi, qpsolvers, torch)
 ├── panda_cylinder.xml          # Franka Emika Panda 7-DOF MJCF robot model
 ├── controllers/
 │   ├── __init__.py
 │   ├── base_controller.py      # Abstract base class interface for robot controllers
-│   └── qp_impedance.py         # Multi-Priority Hierarchical QP Cartesian Impedance Controller
+│   ├── qp_impedance.py         # Multi-Priority Hierarchical QP Cartesian Impedance Controller (Eq. 18)
+│   ├── classical_transpose.py  # Classical Jacobian Transpose Impedance Controller (Eq. 9)
+│   ├── saturated_algebraic.py  # Saturated Algebraic Null-Space Controller with Post-Hoc Clipping (Eq. 10)
+│   └── weighted_qp.py          # Single-Level Weighted-Sum QP Controller
 ├── solvers/
 │   ├── __init__.py
-│   └── casadi_qp_solver.py     # Pre-compiled parametric CasADi QP solver module (qpOASES / OSQP)
+│   └── casadi_qp_solver.py     # Pre-compiled parametric CasADi QP solver module (qpOASES / OSQP / DAQP)
 ├── tasks/
 │   ├── __init__.py
 │   ├── base_task.py            # Abstract base class for prioritizable control tasks
 │   ├── cartesian_task.py       # Cartesian 3D position / 6D pose impedance task (VMC & Full Impedance)
 │   ├── posture_task.py         # Joint-space null-space posture stiffness task
+│   ├── force_task.py           # Cartesian force control task & circular trajectory generator
+│   ├── apf_task.py             # Artificial Potential Field (APF) obstacle repulsion task
 │   └── task_stack.py           # Priority-ordered task stack manager
+├── experiments/
+│   ├── __init__.py
+│   ├── exp1_surface_circle.py  # Exp 1: Surface circular tracking & normal force exertion
+│   ├── exp2_blocked_circle.py  # Exp 2: Blocked circular tracking & compliant obstacle contact
+│   ├── exp3_apf_avoidance.py   # Exp 3: Reactive APF obstacle avoidance
+│   ├── exp4_multilink_push.py  # Exp 4: Multi-link external disturbance rejection
+│   ├── exp5_torque_constrained_wipe.py # Exp 5: Torque-constrained surface wiping
+│   ├── exp6_singularity_tracking.py    # Exp 6: Kinematic singularity tracking & damping
+│   ├── exp7_baseline_comparison.py     # Exp 7: 4-Way baseline comparison (Hoffman et al. Figs 1-4)
+│   ├── exp8_frequency_bode_analysis.py # Exp 8: Frequency response & Bode bandwidth
+│   ├── exp9_passivity_energy_profiling.py # Exp 9: Energy tank & passivity profiling
+│   ├── exp10_parameter_robustness.py   # Exp 10: Model parameter uncertainty robustness
+│   └── benchmark_solver_latency.py     # Real-time solver latency profiling (< 0.5 ms @ 200 Hz)
 ├── utils/
 │   ├── __init__.py
 │   └── math_utils.py           # Dynamically consistent pseudo-inverses, null-space projectors, 6D pose error
+├── scripts/
+│   ├── plot_results.py         # Telemetry comparison plotting for conflict scenarios
+│   └── probe_genesis.py        # Diagnostic probe for Genesis physics & MuJoCo shadow dynamics
 └── envs/
     ├── __init__.py
-    └── genesis_sim.py          # Genesis physics simulator wrapper & PyTorch-NumPy state conversion
+    └── genesis_sim.py          # Genesis physics simulator wrapper with MuJoCo dynamics bridge
 ```
 
 ---
@@ -266,6 +288,31 @@ Notes:
 | `--scenario` | `str` | `reach` | Task hierarchy to run (`reach`, `reach_split`, `conflict`). |
 | `--priority-order` | `str` | `xyz` | Axis ranking in `conflict`, highest priority first (e.g. `xyz`, `zyx`). |
 | `--record` | `str` | `None` | Record the run to a file, e.g. `docs/media/run.gif`. |
+| `--experiment` | `str` | `default` | Run experiment benchmark (`surface_circle`, `blocked_circle`, `apf_avoidance`, `multilink_push`, `torque_wipe`, `singularity`, `baseline_comparison`, `bode`, `passivity`, `robustness`, `benchmark`, `all`). |
+
+---
+
+## Evaluation Benchmark Suite (Task 2.2 & ICRA 2018 Reproduction)
+
+The repository provides a complete benchmark suite covering 10 validation experiments and real-time solver latency profiling:
+
+```bash
+# Run the entire evaluation benchmark suite sequentially (quick mode)
+uv run python run_all_experiments.py --quick --device cpu
+
+# Run specific experiment benchmarks individually:
+uv run python main.py --experiment surface_circle       # Exp 1: Surface circular tracking & normal force
+uv run python main.py --experiment blocked_circle       # Exp 2: Blocked circular tracking & obstacle compliance
+uv run python main.py --experiment apf_avoidance        # Exp 3: Reactive APF obstacle avoidance
+uv run python main.py --experiment multilink_push       # Exp 4: Multi-link disturbance rejection
+uv run python main.py --experiment torque_wipe          # Exp 5: Active torque inequality constraint wiping
+uv run python main.py --experiment singularity          # Exp 6: Kinematic singularity tracking & damping
+uv run python main.py --experiment baseline_comparison  # Exp 7: 4-way baseline comparison (Figs 1-4)
+uv run python main.py --experiment bode                 # Exp 8: Frequency response & Bode bandwidth
+uv run python main.py --experiment passivity            # Exp 9: Energy tank & passivity profiling
+uv run python main.py --experiment robustness           # Exp 10: Model parameter uncertainty robustness
+uv run python main.py --experiment benchmark            # Solver latency profiling (< 0.5 ms)
+```
 
 ---
 
