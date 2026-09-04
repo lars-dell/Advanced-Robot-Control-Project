@@ -3,7 +3,7 @@ Abstract Base Task definition for modular multi-priority robot control.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Tuple, Any
+from typing import Dict, Tuple, Any, Optional
 import numpy as np
 
 
@@ -55,3 +55,19 @@ class BaseTask(ABC):
             float: Scalar tracking error norm.
         """
         pass
+
+    def compute_inequality(
+        self, state: Dict[str, np.ndarray], t: float = 0.0
+    ) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        """
+        Computes optional linear inequality constraint (A_ineq, b_l, b_u) enforced across QP levels:
+            b_l <= A_ineq * tau <= b_u
+
+        Args:
+            state: Robot state dictionary containing 'q', 'dq', 'J', 'B', etc.
+            t: Current simulation time in seconds.
+
+        Returns:
+            Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]: (A_ineq, b_l, b_u) or None if no inequality.
+        """
+        return None

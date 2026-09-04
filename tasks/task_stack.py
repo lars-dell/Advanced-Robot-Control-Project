@@ -52,6 +52,38 @@ class TaskStack:
                 evaluated.append((task, J_i, f_i))
         return evaluated
 
+    def evaluate_inequalities(
+        self, state: Dict[str, np.ndarray], t: float = 0.0
+    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
+        """
+        Collects and stacks all linear inequality constraints from active tasks in the stack:
+            b_l <= A_ineq * tau <= b_u
+
+        Returns:
+            Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
+                (A_ineq, b_ineq_lb, b_ineq_ub) or (None, None, None) if no inequalities defined.
+        """
+        A_list: List[np.ndarray] = []
+        bl_list: List[np.ndarray] = []
+        bu_list: List[np.ndarray] = []
+
+        for task in self.tasks:
+            ineq = task.compute_inequality(state, t)
+            if ineq is not None:
+                A_i, bl_i, bu_i = ineq
+                if A_i is not None and A_i.size > 0:
+                    A_list.append(np.atleast_2d(A_i))
+                    bl_list.append(np.atleast_1d(bl_i))
+                    bu_list.append(np.atleast_1d(bu_i))
+
+        if A_list:
+            A_ineq = np.vstack(A_list)
+            b_ineq_lb = np.concatenate(bl_list)
+            b_ineq_ub = np.concatenate(bu_list)
+            return A_ineq, b_ineq_lb, b_ineq_ub
+
+        return None, None, None
+
     def get_task_errors(self, state: Dict[str, np.ndarray]) -> Dict[str, float]:
         """
         Computes error scalar for each task in the stack.

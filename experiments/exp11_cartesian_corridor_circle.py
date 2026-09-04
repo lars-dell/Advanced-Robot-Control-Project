@@ -177,40 +177,37 @@ def run_experiment_11(
         p, _, v = circle_traj(t)
         return float(p[2]), float(v[2])
 
-    def xy_traj(t: float) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
-        p, _, v = circle_traj(t)
-        return np.array([p[0], p[1], 0.0]), None, np.array([v[0], v[1], 0.0])
-
-    # Build 3-Level Task Hierarchy:
-    # Level 0 (Highest): Z-Corridor Boundary Task (z <= z_max and z >= z_min)
-    # Level 1 (Next):    XY Planar Circle Tracking Task (reaching beyond reach bounds)
-    # Level 2 (Lowest):  Joint Posture Regularization Task
+    # Build Task Hierarchy with Strict QP Inequality Enforcement (Hoffman et al. ICRA 2018):
+    # - Strict Inequality Constraint: End-effector height strictly bounded in [z_min, z_max]
+    #   enforced across ALL priority levels (Eq. 18: b_l <= A_ineq * tau <= b_u).
+    # - Priority 0 (Primary Tracking): Full 3D Circular Trajectory Tracking Task
+    # - Priority 1 (Secondary Tracking): Joint Posture Regularization Task
     task_stack = TaskStack()
 
     z_boundary_task = ZBoundaryTask(
-        name="z_bounds_p0",
+        name="z_corridor_ineq",
         priority=0,
         z_min=z_min,
         z_max=z_max,
         nominal_z_fn=nominal_z_fn,
-        kp=1400.0,
-        kd=90.0
+        as_inequality=True,
+        omega_n=35.0
     )
     task_stack.add_task(z_boundary_task)
 
-    circle_xy_task = CartesianPoseTask(
-        name="circle_xy_p1",
-        priority=1,
-        kp=450.0,
-        kd=45.0,
-        mode="xy",
-        trajectory_fn=xy_traj
+    circle_3d_task = CartesianPoseTask(
+        name="circle_3d_p0",
+        priority=0,
+        kp=500.0,
+        kd=50.0,
+        mode="3d",
+        trajectory_fn=circle_traj
     )
-    task_stack.add_task(circle_xy_task)
+    task_stack.add_task(circle_3d_task)
 
     posture_task = JointPostureTask(
-        name="posture_p2",
-        priority=2,
+        name="posture_p1",
+        priority=1,
         kp=20.0,
         kd=4.0,
         q_des=q_home
@@ -237,12 +234,13 @@ def run_experiment_11(
         t_curr = step * dt
         state = sim.get_state()
         state["t"] = t_curr
+        state["dt"] = dt
 
         p_des, _, v_des = circle_traj(t_curr)
         state["target_pos"] = p_des
         state["target_vel"] = v_des
 
-        # Compute QP multi-priority torques
+        # Compute QP multi-priority torques with hard inequality constraints
         torques = controller.compute_torques(state=state, target=task_stack, t=t_curr)
 
         # Apply torques & step simulation
@@ -356,13 +354,13 @@ def plot_experiment_11(
     ax1 = axs[0, 0]
     ax1.plot(t, p_des[:, 2], "k--", alpha=0.6, label="z_nominal (Circle breaches bounds)")
     ax1.plot(t, p_act[:, 2], "b-", linewidth=2.0, label="z_actual (Clamped within bounds)")
-    ax1.axhline(z_max, color="red", linestyle="-", linewidth=2.0, label=f"Ceiling z_max = {z_max:.2f}m (Priority 0)")
-    ax1.axhline(z_min, color="orange", linestyle="-", linewidth=2.0, label=f"Floor z_min = {z_min:.2f}m (Priority 0)")
+    ax1.axhline(z_max, color="red", linestyle="-", linewidth=2.0, label=f"Ceiling z_max = {z_max:.2f}m (QP Inequality)")
+    ax1.axhline(z_min, color="orange", linestyle="-", linewidth=2.0, label=f"Floor z_min = {z_min:.2f}m (QP Inequality)")
     ax1.fill_between(t, z_max, np.maximum(z_max, p_des[:, 2]), color="red", alpha=0.15, label="Ceiling Breach Zone")
     ax1.fill_between(t, z_min, np.minimum(z_min, p_des[:, 2]), color="orange", alpha=0.15, label="Floor Breach Zone")
     ax1.set_xlabel("Time [s]")
     ax1.set_ylabel("Height Z [m]")
-    ax1.set_title("1. End-Effector Height vs Strict Safety Limits (Ceiling & Floor)")
+    ax1.set_title("1. End-Effector Height vs Strict Safety Limits (QP Inequality Constraint)")
     ax1.grid(True)
     ax1.legend(loc="upper right", fontsize=8)
 
@@ -382,12 +380,12 @@ def plot_experiment_11(
     # Panel 3: 2D Projected Motion in the X-Z Plane (The Truncated Loop)
     ax3 = axs[1, 0]
     ax3.plot(p_des[:, 0], p_des[:, 2], "r--", linewidth=1.5, label="Nominal Circle (Out-of-Bounds)")
-    ax3.plot(p_act[:, 0], p_act[:, 2], "b-", linewidth=2.0, label="Actual Trajectory (Truncated by Priorities)")
+    ax3.plot(p_act[:, 0], p_act[:, 2], "b-", linewidth=2.0, label="Actual Trajectory (Strict QP Inequality Clamping)")
     ax3.axhline(z_max, color="red", linestyle="-", linewidth=1.5, label="Ceiling Plane")
     ax3.axhline(z_min, color="orange", linestyle="-", linewidth=1.5, label="Floor Plane")
     ax3.set_xlabel("X [m]")
     ax3.set_ylabel("Z [m]")
-    ax3.set_title("3. X-Z Cross-Section: Flat Top & Bottom (Priority Clamping)")
+    ax3.set_title("3. X-Z Cross-Section: Flat Top & Bottom (Strict QP Inequality Clamping)")
     ax3.grid(True)
     ax3.legend(fontsize=8)
 
@@ -421,8 +419,8 @@ def plot_experiment_11(
     ax6.set_yticks([0, 1])
     ax6.set_yticklabels(["Free Tracking", "Boundary Clamped"])
     ax6.set_xlabel("Time [s]")
-    ax6.set_ylabel("Priority 0 State")
-    ax6.set_title("6. Dynamic Activation of Height Boundary Clamping")
+    ax6.set_ylabel("Inequality State")
+    ax6.set_title("6. Dynamic Activation of QP Inequality Boundary Clamping")
     ax6.grid(True)
     ax6.legend(loc="upper right", fontsize=8)
 

@@ -4,7 +4,8 @@ Operational space height boundary (ceiling and floor) task implementation.
 Enforces unilateral safety constraints on end-effector height:
     - Upper bound (Ceiling): z <= z_max
     - Lower bound (Floor):   z >= z_min
-While tracking nominal trajectory height within the admissible corridor [z_min, z_max].
+Formulated as strict QP inequality constraints b_l <= A_ineq * tau <= b_u based on
+Hoffman et al. (ICRA 2018) Equation (18).
 """
 
 from typing import Dict, Tuple, Optional, Callable
@@ -17,10 +18,10 @@ class ZBoundaryTask(BaseTask):
     """
     Operational space Z-coordinate height boundary and corridor task.
 
-    Guarantees that the end-effector strictly remains below z_max and above z_min:
-        - When nominal z > z_max: clamps reference to z_max (active ceiling constraint)
-        - When nominal z < z_min: clamps reference to z_min (active floor constraint)
-        - When z_min <= nominal z <= z_max: tracks nominal vertical trajectory smoothly
+    Strictly guarantees that the end-effector remains below z_max and above z_min:
+        - When inside corridor [z_min, z_max]: inequality constraint is inactive.
+        - When approaching or reaching z_max: hard inequality J_z B^-1 tau <= b_u prevents penetration.
+        - When approaching or reaching z_min: hard inequality J_z B^-1 tau >= b_l prevents penetration.
     """
 
     def __init__(
@@ -30,6 +31,8 @@ class ZBoundaryTask(BaseTask):
         z_min: float = 0.35,
         z_max: float = 0.55,
         nominal_z_fn: Optional[Callable[[float], Tuple[float, float]]] = None,
+        as_inequality: bool = True,
+        omega_n: float = 35.0,
         kp: float = 1200.0,
         kd: float = 80.0,
     ) -> None:
@@ -42,13 +45,17 @@ class ZBoundaryTask(BaseTask):
             z_min: Floor boundary height in meters (default: 0.35m).
             z_max: Ceiling boundary height in meters (default: 0.55m).
             nominal_z_fn: Optional callable t -> (z_nom, vz_nom) providing unconstrained vertical reference.
-            kp: Proportional stiffness gain along Z.
-            kd: Derivative damping gain along Z.
+            as_inequality: If True, enforces strict inequality constraints in QP without equality cost.
+            omega_n: Control barrier function natural frequency for safe deceleration (rad/s).
+            kp: Proportional stiffness gain along Z (fallback equality mode).
+            kd: Derivative damping gain along Z (fallback equality mode).
         """
         super().__init__(name=name, priority=priority)
         self.z_min = float(z_min)
         self.z_max = float(z_max)
         self.nominal_z_fn = nominal_z_fn
+        self.as_inequality = as_inequality
+        self.omega_n = float(omega_n)
         self.kp = float(kp)
         self.kd = float(kd)
 
@@ -57,70 +64,114 @@ class ZBoundaryTask(BaseTask):
         self.floor_active = False
         self.current_violation = 0.0
 
-    def compute(self, state: Dict[str, np.ndarray], t: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
+    def compute_inequality(
+        self, state: Dict[str, np.ndarray], t: float = 0.0
+    ) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
         """
-        Computes the Z-axis Jacobian J_z and virtual impedance force f_z.
+        Computes the operational-space height corridor inequality constraint:
+            b_l <= J_z B^-1 tau_qp <= b_u
 
-        Args:
-            state: Robot state dictionary containing 'J', 'ee_pos', 'dq'.
-            t: Simulation timestamp in seconds.
-
-        Returns:
-            Tuple[np.ndarray, np.ndarray]: (J_z of shape (1, n_dofs), f_z of shape (1,))
+        Enforces:
+            z <= z_max (Ceiling limit)
+            z >= z_min (Floor limit)
+        using a second-order control barrier function and discrete viability horizon.
         """
+        if not self.as_inequality:
+            return None
+
         J_full = state["J"]  # (6, n_dofs)
         n_dofs = J_full.shape[1]
         p_curr = state["ee_pos"]
         dq = state.get("dq", np.zeros(n_dofs))
+        B = state["B"]
+        dt = float(state.get("dt", 0.005))
 
-        z_curr = p_curr[2]
+        z_curr = float(p_curr[2])
         J_z = J_full[2:3, :]  # (1, n_dofs)
         v_z = float((J_z @ dq)[0])
 
-        # Retrieve nominal vertical reference
+        B_inv = np.linalg.inv(B)
+        A_ineq = J_z @ B_inv  # (1, n_dofs)
+
+        # Retrieve nominal reference to update diagnostic flags
+        if self.nominal_z_fn is not None:
+            z_nom, _ = self.nominal_z_fn(t)
+        else:
+            z_nom = state.get("target_pos", p_curr)[2]
+
+        self.ceiling_active = bool(z_nom > self.z_max or z_curr >= self.z_max - 0.001)
+        self.floor_active = bool(z_nom < self.z_min or z_curr <= self.z_min + 0.001)
+        self.current_violation = max(0.0, z_curr - self.z_max, self.z_min - z_curr)
+
+        # Second-order viability and CBF limits on vertical acceleration:
+        omega_n = self.omega_n
+
+        # Upper bound (Ceiling: z <= z_max)
+        d_ceil = self.z_max - z_curr
+        a_max_cbf = omega_n * omega_n * d_ceil - 2.0 * omega_n * v_z
+        a_max_discrete = (2.0 / (dt * dt)) * d_ceil - (2.0 / dt) * v_z
+        bu_val = min(a_max_cbf, a_max_discrete)
+
+        # Lower bound (Floor: z >= z_min)
+        d_flr = self.z_min - z_curr
+        a_min_cbf = omega_n * omega_n * d_flr - 2.0 * omega_n * v_z
+        a_min_discrete = (2.0 / (dt * dt)) * d_flr - (2.0 / dt) * v_z
+        bl_val = max(a_min_cbf, a_min_discrete)
+
+        # Numerical safeguard against numerical overlap
+        if bl_val > bu_val:
+            mid = 0.5 * (bl_val + bu_val)
+            bl_val = mid
+            bu_val = mid
+
+        return A_ineq, np.array([bl_val], dtype=np.float64), np.array([bu_val], dtype=np.float64)
+
+    def compute(self, state: Dict[str, np.ndarray], t: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Computes task objective. If as_inequality is True, returns empty Jacobian so corridor
+        is handled solely via the hard QP inequality constraints.
+        """
+        J_full = state["J"]
+        n_dofs = J_full.shape[1]
+
+        if self.as_inequality:
+            # In inequality mode, corridor is an inequality constraint, not an equality cost
+            return np.zeros((0, n_dofs), dtype=np.float64), np.zeros(0, dtype=np.float64)
+
+        # Fallback equality mode
+        p_curr = state["ee_pos"]
+        dq = state.get("dq", np.zeros(n_dofs))
+        z_curr = p_curr[2]
+        J_z = J_full[2:3, :]
+        v_z = float((J_z @ dq)[0])
+
         if self.nominal_z_fn is not None:
             z_nom, vz_nom = self.nominal_z_fn(t)
         else:
             z_nom = state.get("target_pos", p_curr)[2]
             vz_nom = state.get("target_vel", np.zeros(6))[2]
 
-        # Enforce strict corridor projection:
-        # Highest priority requirement: remain below z_max and above z_min
         if z_nom > self.z_max:
-            # Ceiling limit active: clamp reference to ceiling
             z_target = self.z_max
             vz_target = 0.0
             self.ceiling_active = True
             self.floor_active = False
         elif z_nom < self.z_min:
-            # Floor limit active: clamp reference to floor
             z_target = self.z_min
             vz_target = 0.0
             self.ceiling_active = False
             self.floor_active = True
         else:
-            # Inside admissible vertical corridor
             z_target = z_nom
             vz_target = vz_nom
             self.ceiling_active = False
             self.floor_active = False
 
-        # Virtual spring-damper impedance law along Z
         e_z = z_target - z_curr
         ve_z = vz_target - v_z
         f_z = self.kp * e_z + self.kd * ve_z
 
-        # Strong barrier unilateral push if penetrating boundary
-        if z_curr > self.z_max:
-            # Must strictly push downwards
-            f_z = min(f_z, -abs(self.kp * (z_curr - self.z_max)))
-        elif z_curr < self.z_min:
-            # Must strictly push upwards
-            f_z = max(f_z, abs(self.kp * (self.z_min - z_curr)))
-
-        # Violation diagnostics
         self.current_violation = max(0.0, z_curr - self.z_max, self.z_min - z_curr)
-
         return J_z, np.array([f_z], dtype=np.float64)
 
     def compute_error(self, state: Dict[str, np.ndarray]) -> float:

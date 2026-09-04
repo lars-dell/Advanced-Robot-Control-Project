@@ -102,7 +102,10 @@ class QPImpedanceController(BaseController):
         lb: np.ndarray,
         ub: np.ndarray,
         A_eq: Optional[np.ndarray] = None,
-        b_eq: Optional[np.ndarray] = None
+        b_eq: Optional[np.ndarray] = None,
+        A_ineq: Optional[np.ndarray] = None,
+        b_ineq_lb: Optional[np.ndarray] = None,
+        b_ineq_ub: Optional[np.ndarray] = None
     ) -> np.ndarray:
         """
         Delegates QP solving to the pre-compiled CasADi solver module.
@@ -114,11 +117,18 @@ class QPImpedanceController(BaseController):
             ub: Upper bounds vector (n_vars,).
             A_eq: Optional equality constraint matrix (n_eq, n_vars).
             b_eq: Optional equality constraint vector (n_eq,).
+            A_ineq: Optional linear inequality constraint matrix (n_ineq, n_vars).
+            b_ineq_lb: Optional linear inequality lower bound vector (n_ineq,).
+            b_ineq_ub: Optional linear inequality upper bound vector (n_ineq,).
 
         Returns:
             np.ndarray: Optimal decision variable vector x of shape (n_vars,).
         """
-        return self.qp_solver.solve(H=H, g=g, lb=lb, ub=ub, A_eq=A_eq, b_eq=b_eq)
+        return self.qp_solver.solve(
+            H=H, g=g, lb=lb, ub=ub,
+            A_eq=A_eq, b_eq=b_eq,
+            A_ineq=A_ineq, b_ineq_lb=b_ineq_lb, b_ineq_ub=b_ineq_ub
+        )
 
     def _is_feasible(
         self,
@@ -127,10 +137,13 @@ class QPImpedanceController(BaseController):
         ub: np.ndarray,
         A_eq: Optional[np.ndarray],
         b_eq: Optional[np.ndarray],
+        A_ineq: Optional[np.ndarray] = None,
+        b_ineq_lb: Optional[np.ndarray] = None,
+        b_ineq_ub: Optional[np.ndarray] = None,
         tol: float = 1e-4
     ) -> bool:
         """
-        Check a QP solution against its own bounds and equality constraints.
+        Check a QP solution against its own bounds, equality constraints, and inequality constraints.
 
         The solver does not raise on failure, so this is the only way to know whether the returned
         vector is a solution or a fallback.
@@ -141,6 +154,10 @@ class QPImpedanceController(BaseController):
             return False
         if A_eq is not None and np.linalg.norm(A_eq @ tau - b_eq) > 1e-4 * max(1.0, np.linalg.norm(b_eq)):
             return False
+        if A_ineq is not None and b_ineq_lb is not None and b_ineq_ub is not None:
+            A_tau = A_ineq @ tau
+            if np.any(A_tau < b_ineq_lb - tol) or np.any(A_tau > b_ineq_ub + tol):
+                return False
         return True
 
     def compute_torques(
@@ -199,10 +216,19 @@ class QPImpedanceController(BaseController):
         # Inverse of inertia matrix B
         B_inv = np.linalg.inv(B)
 
-        # Build task list from TaskStack or target dict
+        # Build task list and linear inequality constraints from TaskStack or target dict
+        A_ineq = None
+        b_ineq_lb = None
+        b_ineq_ub = None
+
         if isinstance(target, TaskStack):
             evaluated_tasks = target.evaluate_all(state, t)
+            A_ineq, b_ineq_lb, b_ineq_ub = target.evaluate_inequalities(state, t)
         else:
+            A_ineq = target.get("A_ineq", None)
+            b_ineq_lb = target.get("b_ineq_lb", None)
+            b_ineq_ub = target.get("b_ineq_ub", None)
+
             # Construct default 2-level task hierarchy from target dictionary
             p_curr = state.get("ee_pos", np.zeros(3))
             R_curr = state.get("ee_rot", np.eye(3))
@@ -274,7 +300,11 @@ class QPImpedanceController(BaseController):
                 A_eq = None
                 b_eq = None
 
-            tau_i = self.qp_solver.solve(H=H_i, g=g_i, lb=lb, ub=ub, A_eq=A_eq, b_eq=b_eq)
+            tau_i = self.qp_solver.solve(
+                H=H_i, g=g_i, lb=lb, ub=ub,
+                A_eq=A_eq, b_eq=b_eq,
+                A_ineq=A_ineq, b_ineq_lb=b_ineq_lb, b_ineq_ub=b_ineq_ub
+            )
 
             # Validate before trusting it. The solver is configured with error_on_fail=False and
             # returns zeros from its exception handler, and zero is NOT a feasible point when the
@@ -284,7 +314,7 @@ class QPImpedanceController(BaseController):
             # tau_fallback is always feasible: at level 0 it is the origin projected into the box,
             # and afterwards it is the previous level's optimum, which satisfies this level's bounds
             # and every equality constraint carried into it by construction.
-            if not self._is_feasible(tau_i, lb, ub, A_eq, b_eq):
+            if not self._is_feasible(tau_i, lb, ub, A_eq, b_eq, A_ineq, b_ineq_lb, b_ineq_ub):
                 self.n_qp_failures += 1
                 if self.n_qp_failures <= 5:
                     logger.warning(
