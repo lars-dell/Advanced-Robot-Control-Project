@@ -15,7 +15,7 @@ import logging
 import os
 import pathlib
 import sys
-from typing import Dict, List, Optional, Tuple, Sequence
+from typing import Dict, List, Optional, Tuple, Sequence, Union
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from envs.genesis_sim import GenesisSim
-from controllers.qp_impedance import QPImpedanceController
+from controllers import make_controller, BaseController
 from tasks import TaskStack, CartesianPoseTask, JointPostureTask
 
 logger = logging.getLogger("ExpConflict")
@@ -41,7 +41,8 @@ def run_conflict(
     show_markers: bool = True,
     record_path: Optional[str] = None,
     save_plot: bool = True,
-    solver: str = "daqp"
+    solver: str = "daqp",
+    controller: Union[str, BaseController] = "hierarchical_qp"
 ) -> Dict[str, np.ndarray]:
     """
     Executes the conflicting priority scenario under the specified hierarchy order.
@@ -57,6 +58,7 @@ def run_conflict(
         record_path: Optional path to record GIF/video.
         save_plot: Whether to generate diagnostic plots.
         solver: QP solver backend engine ("daqp", "osqp", "qpoases").
+        controller: Controller name or BaseController instance (default: 'hierarchical_qp').
 
     Returns:
         Dict[str, np.ndarray]: Recorded telemetry data.
@@ -78,15 +80,19 @@ def run_conflict(
         record_path=record_path
     )
 
-    controller = QPImpedanceController(
-        n_dofs=7,
-        kp_cart=300.0,
-        kd_cart=60.0,
-        kp_null=20.0,
-        kd_null=10.0,
-        solver_name=solver,
-        reg_eps=1e-2
-    )
+    if isinstance(controller, str):
+        controller = make_controller(
+            controller,
+            n_dofs=7,
+            kp_cart=300.0,
+            kd_cart=60.0,
+            kp_null=20.0,
+            kd_null=10.0,
+            solver_name=solver,
+            reg_eps=1e-2
+        )
+
+
 
     target_pos = np.array([1.30, 0.15, 0.75])
     q_home = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785])

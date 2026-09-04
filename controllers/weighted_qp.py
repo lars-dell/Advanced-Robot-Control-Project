@@ -57,6 +57,7 @@ class WeightedQPController(BaseController):
             reg_eps: Regularization factor.
         """
         super().__init__(n_dofs=n_dofs)
+        self.handles_inequalities = True
 
         if tau_min is None:
             self.tau_min = np.array([-87.0, -87.0, -87.0, -87.0, -12.0, -12.0, -12.0], dtype=np.float64)
@@ -99,16 +100,27 @@ class WeightedQPController(BaseController):
         Returns:
             np.ndarray: Commanded joint torques of shape (n_dofs,).
         """
+        state["handles_inequalities"] = True
         B = state["B"]
         h = state.get("h", np.zeros(self.n_dofs, dtype=np.float64))
+
         B_inv = np.linalg.inv(B)
 
         lb = self.tau_min - h
         ub = self.tau_max - h
 
+        A_ineq = None
+        b_ineq_lb = None
+        b_ineq_ub = None
+
         if isinstance(target, TaskStack):
             evaluated_tasks = target.evaluate_all(state, t)
+            A_ineq, b_ineq_lb, b_ineq_ub = target.evaluate_inequalities(state, t)
         else:
+            A_ineq = target.get("A_ineq", None)
+            b_ineq_lb = target.get("b_ineq_lb", None)
+            b_ineq_ub = target.get("b_ineq_ub", None)
+
             p_curr = state.get("ee_pos", np.zeros(3))
             R_curr = state.get("ee_rot", np.eye(3))
             p_des = target["pos"]
@@ -148,24 +160,36 @@ class WeightedQPController(BaseController):
         g = np.zeros(self.n_dofs, dtype=np.float64)
 
         for level, (_, J_i, f_i) in enumerate(evaluated_tasks):
+            if J_i is None or J_i.shape[0] == 0:
+                continue
             w_i = self.weights[level] if level < len(self.weights) else (self.weights[-1] * 0.1)
             f_vec = np.asarray(f_i, dtype=np.float64).flatten()
 
-            if J_i.shape[0] == self.n_dofs:
-                # Joint space task
-                H += w_i * np.eye(self.n_dofs)
-                g += - w_i * f_vec
-            else:
-                # Operational space task
-                M_i = J_i @ B_inv  # (m_i, n_dofs)
-                target_proj = M_i @ J_i.T @ f_vec
-                H += w_i * (M_i.T @ M_i)
-                g += - w_i * (M_i.T @ target_proj)
+            # Mapping matrix M_i = J_i * B^(-1)
+            M_i = J_i @ B_inv  # (m_i, n_dofs)
+            target_proj = M_i @ J_i.T @ f_vec
+            H += w_i * (M_i.T @ M_i)
+            g += - w_i * (M_i.T @ target_proj)
 
-        # Solve single-level QP
-        tau_opt = self.qp_solver.solve(H=H, g=g, lb=lb, ub=ub)
+        # Solve single-level QP with bound and inequality constraints
+        tau_opt = self.qp_solver.solve(
+            H=H, g=g, lb=lb, ub=ub,
+            A_ineq=A_ineq, b_ineq_lb=b_ineq_lb, b_ineq_ub=b_ineq_ub
+        )
+
+        # Record priority residual (deviation from Level 0 unconstrained optimum)
+        if evaluated_tasks and evaluated_tasks[0][1] is not None:
+            J_0, f_0 = evaluated_tasks[0][1], evaluated_tasks[0][2]
+            f_0_vec = np.asarray(f_0, dtype=np.float64).flatten()
+            M_0 = J_0 @ B_inv
+            self.priority_residuals = [
+                float(np.linalg.norm(M_0 @ tau_opt - M_0 @ J_0.T @ f_0_vec))
+            ]
 
         # Total commanded torque
         tau_cmd = tau_opt + h
-        tau_cmd = np.clip(tau_cmd, self.tau_min, self.tau_max)
+
+        # Update standard telemetry
+        self._update_violation_telemetry(tau_cmd=tau_cmd, tau_min=self.tau_min, tau_max=self.tau_max)
         return tau_cmd
+

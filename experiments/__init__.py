@@ -20,6 +20,7 @@ from experiments.exp9_passivity_energy_profiling import run_experiment_9
 from experiments.exp10_parameter_robustness import run_experiment_10
 from experiments.exp11_cartesian_corridor_circle import run_experiment_11, run_experiment_11 as run_corridor
 from experiments.benchmark_solver_latency import run_latency_benchmark
+from experiments.compare_controllers import run_controller_comparison
 
 __all__ = [
     "run_reach",
@@ -38,4 +39,6 @@ __all__ = [
     "run_experiment_11",
     "run_corridor",
     "run_latency_benchmark",
+    "run_controller_comparison",
 ]
+

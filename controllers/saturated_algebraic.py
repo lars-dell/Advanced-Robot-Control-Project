@@ -90,8 +90,10 @@ class SaturatedAlgebraicController(BaseController):
         Returns:
             np.ndarray: Commanded joint torques of shape (n_dofs,).
         """
+        state["handles_inequalities"] = False
         B = state["B"]
         h = state.get("h", np.zeros(self.n_dofs, dtype=np.float64))
+
         I_n = np.eye(self.n_dofs)
 
         if isinstance(target, TaskStack):
@@ -154,6 +156,11 @@ class SaturatedAlgebraicController(BaseController):
                 N_i = I_n - J_i.T @ J_bar_i.T
                 N_cum = N_cum @ N_i
 
+        tau_raw = tau_opt + h
         # Naive post-hoc torque saturation clipping
-        tau_cmd = np.clip(tau_opt + h, self.tau_min, self.tau_max)
+        tau_cmd = np.clip(tau_raw, self.tau_min, self.tau_max)
+
+        # Record telemetry: unclipped_tau tracks instances where the controller required clipping to stay within limits
+        self._update_violation_telemetry(tau_cmd=tau_cmd, tau_min=self.tau_min, tau_max=self.tau_max, unclipped_tau=tau_raw)
         return tau_cmd
+

@@ -128,51 +128,56 @@ class ZBoundaryTask(BaseTask):
 
     def compute(self, state: Dict[str, np.ndarray], t: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Computes task objective. If as_inequality is True, returns empty Jacobian so corridor
-        is handled solely via the hard QP inequality constraints.
+        Computes task objective.
+        - For QP controllers supporting hard inequalities: returns an empty equality task so the
+          corridor is handled via strict QP linear inequalities (b_l <= A_ineq * tau <= b_u).
+        - For non-QP controllers (Transpose, Saturated Algebraic): automatically activates a unilateral
+          virtual barrier spring-damper whenever the end-effector breaches or approaches the corridor.
         """
         J_full = state["J"]
         n_dofs = J_full.shape[1]
 
-        if self.as_inequality:
-            # In inequality mode, corridor is an inequality constraint, not an equality cost
+        controller_handles_ineq = state.get("handles_inequalities", False)
+
+        if self.as_inequality and controller_handles_ineq:
+            # Native inequality mode for QP controllers: corridor is an inequality constraint, not an equality cost
             return np.zeros((0, n_dofs), dtype=np.float64), np.zeros(0, dtype=np.float64)
 
-        # Fallback equality mode
+        # Unilateral barrier spring-damper mode (for non-QP controllers or when as_inequality=False)
         p_curr = state["ee_pos"]
         dq = state.get("dq", np.zeros(n_dofs))
-        z_curr = p_curr[2]
+        z_curr = float(p_curr[2])
         J_z = J_full[2:3, :]
         v_z = float((J_z @ dq)[0])
 
-        if self.nominal_z_fn is not None:
-            z_nom, vz_nom = self.nominal_z_fn(t)
-        else:
-            z_nom = state.get("target_pos", p_curr)[2]
-            vz_nom = state.get("target_vel", np.zeros(6))[2]
+        f_z = 0.0
+        active = False
 
-        if z_nom > self.z_max:
-            z_target = self.z_max
-            vz_target = 0.0
+        if z_curr > self.z_max:
+            # Penetrating ceiling -> downward repulsive force
+            penetration = z_curr - self.z_max
+            f_z = -self.kp * penetration - self.kd * v_z
             self.ceiling_active = True
             self.floor_active = False
-        elif z_nom < self.z_min:
-            z_target = self.z_min
-            vz_target = 0.0
+            active = True
+        elif z_curr < self.z_min:
+            # Penetrating floor -> upward repulsive force
+            penetration = self.z_min - z_curr
+            f_z = self.kp * penetration - self.kd * v_z
             self.ceiling_active = False
             self.floor_active = True
+            active = True
         else:
-            z_target = z_nom
-            vz_target = vz_nom
             self.ceiling_active = False
             self.floor_active = False
 
-        e_z = z_target - z_curr
-        ve_z = vz_target - v_z
-        f_z = self.kp * e_z + self.kd * ve_z
-
         self.current_violation = max(0.0, z_curr - self.z_max, self.z_min - z_curr)
-        return J_z, np.array([f_z], dtype=np.float64)
+
+        if active:
+            return J_z, np.array([f_z], dtype=np.float64)
+        else:
+            return np.zeros((0, n_dofs), dtype=np.float64), np.zeros(0, dtype=np.float64)
+
 
     def compute_error(self, state: Dict[str, np.ndarray]) -> float:
         """

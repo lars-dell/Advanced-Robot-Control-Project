@@ -26,7 +26,7 @@ import os
 import pathlib
 import sys
 import time
-from typing import Dict, List, Tuple, Any, Optional
+from typing import Dict, List, Tuple, Any, Optional, Union
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -36,8 +36,9 @@ import matplotlib.pyplot as plt
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from envs.genesis_sim import GenesisSim
-from controllers.qp_impedance import QPImpedanceController
+from controllers import make_controller, BaseController
 from tasks import TaskStack, CartesianPoseTask, JointPostureTask, ZBoundaryTask
+
 
 logger = logging.getLogger("Exp11_CorridorCircle")
 
@@ -93,7 +94,8 @@ def run_experiment_11(
     show_markers: bool = True,
     record_path: Optional[str] = None,
     save_plot: bool = True,
-    solver: str = "daqp"
+    solver: str = "daqp",
+    controller: Union[str, BaseController] = "hierarchical_qp"
 ) -> Dict[str, np.ndarray]:
     """
     Executes Experiment 11: Prioritized Height Corridor with Out-of-Bounds Circle Tracking.
@@ -110,6 +112,7 @@ def run_experiment_11(
         record_path: Optional video/GIF output path.
         save_plot: Whether to generate diagnostic figures.
         solver: QP solver plugin ('daqp', 'osqp', 'qpoases').
+        controller: Controller name or BaseController instance (default: 'hierarchical_qp').
 
     Returns:
         Dict[str, np.ndarray]: Recorded telemetry data arrays.
@@ -149,15 +152,18 @@ def run_experiment_11(
         boxes=boxes
     )
 
-    controller = QPImpedanceController(
-        n_dofs=7,
-        kp_cart=450.0,
-        kd_cart=45.0,
-        kp_null=20.0,
-        kd_null=4.0,
-        solver_name=solver,
-        reg_eps=1e-4
-    )
+    if isinstance(controller, str):
+        controller = make_controller(
+            controller,
+            n_dofs=7,
+            kp_cart=450.0,
+            kd_cart=45.0,
+            kp_null=20.0,
+            kd_null=4.0,
+            solver_name=solver,
+            reg_eps=1e-4
+        )
+
 
     state = sim.get_state()
     p_init = state["ee_pos"].copy()

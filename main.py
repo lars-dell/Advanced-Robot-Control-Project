@@ -30,6 +30,7 @@ from experiments import (
     run_experiment_10,
     run_experiment_11,
     run_latency_benchmark,
+    run_controller_comparison,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,19 @@ def main() -> None:
         help="QP solver backend engine plugin (default: 'daqp', choices: 'daqp', 'osqp', 'qpoases')"
     )
     parser.add_argument(
+        "--controller",
+        "--ctrl",
+        type=str,
+        default="hierarchical_qp",
+        choices=[
+            "hierarchical_qp",
+            "weighted_qp",
+            "saturated_algebraic",
+            "classical_transpose",
+        ],
+        help="Robot controller algorithm (default: 'hierarchical_qp', choices: 'hierarchical_qp', 'weighted_qp', 'saturated_algebraic', 'classical_transpose')",
+    )
+    parser.add_argument(
         "--experiment",
         "--exp",
         type=str,
@@ -84,6 +98,8 @@ def main() -> None:
             "corridor",
             "z_bounds_circle",
             "exp11",
+            "compare",
+            "controller_comparison",
             "all",
         ],
         help="Experiment or priority scenario selection (alias: --exp, default: 'reach')",
@@ -92,19 +108,35 @@ def main() -> None:
     parser.add_argument("--z-max", type=float, default=0.55, help="Upper height limit in meters (default: 0.55)")
     parser.add_argument(
         "--scenario",
-        dest="experiment",
-        choices=["reach", "reach_split", "conflict"],
-        help=argparse.SUPPRESS,
+        type=str,
+        default=None,
+        choices=["reach", "reach_split", "conflict", "corridor"],
+        help="Scenario selection when running comparison mode or as direct scenario runner",
     )
     args = parser.parse_args()
 
     show_viewer = not args.no_vis
     show_markers = not args.no_markers
 
-    # Dispatch experiment or priority hierarchy scenario
+    # Support --scenario overriding default --experiment if provided
     exp = args.experiment
+    if args.scenario is not None and exp == "reach":
+        exp = args.scenario
 
-    if exp == "reach":
+    # Dispatch experiment or priority hierarchy scenario
+    if exp in ("compare", "controller_comparison"):
+        target_scenario = args.scenario or "conflict"
+        run_controller_comparison(
+            scenario=target_scenario,
+            sim_time=args.time,
+            dt=args.dt,
+            device=args.device,
+            priority_order=tuple(args.priority_order),
+            solver=args.solver,
+            save_plot=True,
+            out_path=args.out,
+        )
+    elif exp == "reach":
         sim_time = args.time if args.time is not None else 5.0
         out_path = args.out or "results/reach.npz"
         run_reach(
@@ -116,6 +148,7 @@ def main() -> None:
             show_markers=show_markers,
             record_path=args.record,
             solver=args.solver,
+            controller=args.controller,
         )
     elif exp == "reach_split":
         sim_time = args.time if args.time is not None else 5.0
@@ -129,6 +162,7 @@ def main() -> None:
             show_markers=show_markers,
             record_path=args.record,
             solver=args.solver,
+            controller=args.controller,
         )
     elif exp == "conflict":
         sim_time = args.time if args.time is not None else 7.0
@@ -144,6 +178,7 @@ def main() -> None:
             show_markers=show_markers,
             record_path=args.record,
             solver=args.solver,
+            controller=args.controller,
         )
     elif exp == "surface_circle":
         run_experiment_1(sim_time=args.time or 8.0, dt=args.dt, show_viewer=show_viewer, device=args.device)
@@ -183,6 +218,7 @@ def main() -> None:
             show_markers=show_markers,
             record_path=args.record,
             solver=args.solver,
+            controller=args.controller,
         )
     elif exp == "all":
         cmd = [sys.executable, "run_all_experiments.py", "--device", args.device]
@@ -191,3 +227,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

@@ -18,6 +18,7 @@ import pathlib
 import sys
 from typing import Dict, List, Optional
 import numpy as np
+from typing import Dict, List, Optional, Tuple, Any, Union
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -26,7 +27,7 @@ import matplotlib.pyplot as plt
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from envs.genesis_sim import GenesisSim
-from controllers.qp_impedance import QPImpedanceController
+from controllers import make_controller, BaseController
 from tasks import TaskStack, CartesianPoseTask, JointPostureTask
 
 logger = logging.getLogger("ExpReachSplit")
@@ -41,7 +42,8 @@ def run_reach_split(
     show_markers: bool = True,
     record_path: Optional[str] = None,
     save_plot: bool = True,
-    solver: str = "daqp"
+    solver: str = "daqp",
+    controller: Union[str, BaseController] = "hierarchical_qp"
 ) -> Dict[str, np.ndarray]:
     """
     Executes the decomposed 1-D Cartesian reaching scenario.
@@ -56,6 +58,7 @@ def run_reach_split(
         record_path: Optional path to save recording.
         save_plot: Whether to generate diagnostic figures.
         solver: QP solver backend engine ("daqp", "osqp", "qpoases").
+        controller: Controller name or BaseController instance (default: 'hierarchical_qp').
 
     Returns:
         Dict[str, np.ndarray]: Telemetry logs.
@@ -73,15 +76,18 @@ def run_reach_split(
         record_path=record_path
     )
 
-    controller = QPImpedanceController(
-        n_dofs=7,
-        kp_cart=400.0,
-        kd_cart=40.0,
-        kp_null=20.0,
-        kd_null=4.0,
-        solver_name=solver,
-        reg_eps=1e-4
-    )
+    if isinstance(controller, str):
+        controller = make_controller(
+            controller,
+            n_dofs=7,
+            kp_cart=400.0,
+            kd_cart=40.0,
+            kp_null=20.0,
+            kd_null=4.0,
+            solver_name=solver,
+            reg_eps=1e-4
+        )
+
 
     initial_state = sim.get_state()
     initial_ee_pos = initial_state["ee_pos"].copy()

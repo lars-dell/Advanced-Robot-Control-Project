@@ -86,8 +86,10 @@ class ClassicalTransposeController(BaseController):
         Returns:
             np.ndarray: Commanded joint torques of shape (n_dofs,).
         """
+        state["handles_inequalities"] = False
         h = state.get("h", np.zeros(self.n_dofs, dtype=np.float64))
         tau_opt = np.zeros(self.n_dofs, dtype=np.float64)
+
 
         if isinstance(target, TaskStack):
             evaluated_tasks = target.evaluate_all(state, t)
@@ -137,4 +139,8 @@ class ClassicalTransposeController(BaseController):
 
         # Total commanded torque with feedforward gravity/Coriolis compensation
         tau_cmd = tau_opt + h
+
+        # Check torque limits (Classical transpose does not bound torques, records violations)
+        self._update_violation_telemetry(tau_cmd=tau_cmd, tau_min=self.tau_min, tau_max=self.tau_max)
         return tau_cmd
+

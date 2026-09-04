@@ -56,6 +56,7 @@ class QPImpedanceController(BaseController):
             reg_eps: Quadratic regularization weight epsilon for QP objective.
         """
         super().__init__(n_dofs=n_dofs)
+        self.handles_inequalities = True
 
         # Torque limits (default Franka Panda bounds if unspecified)
         if tau_min is None:
@@ -192,8 +193,10 @@ class QPImpedanceController(BaseController):
         Returns:
             np.ndarray: Desired joint torques of shape (n_dofs,).
         """
+        state["handles_inequalities"] = True
         q = state["q"]
         dq = state["dq"]
+
         B = state["B"]
         n_dofs = self.n_dofs
 
