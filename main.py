@@ -31,6 +31,8 @@ from experiments import (
     run_experiment_11,
     run_latency_benchmark,
     run_controller_comparison,
+    run_parameter_sensitivity_study,
+    run_chatter_mitigation_benchmark,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,12 +100,17 @@ def main() -> None:
             "corridor",
             "z_bounds_circle",
             "exp11",
+            "gain_sweep",
+            "chatter_mitigation",
             "compare",
             "controller_comparison",
             "all",
         ],
         help="Experiment or priority scenario selection (alias: --exp, default: 'reach')",
     )
+    parser.add_argument("--slack-weight", type=float, default=None, help="Soft priority penalty weight rho (default: None for strict hard equality)")
+    parser.add_argument("--torque-rate-weight", type=float, default=0.0, help="Torque variation penalty weight (default: 0.0)")
+    parser.add_argument("--max-torque-rate", type=float, default=None, help="Maximum torque slew rate in N*m/s (default: None)")
     parser.add_argument("--z-min", type=float, default=0.35, help="Lower height limit in meters (default: 0.35)")
     parser.add_argument("--z-max", type=float, default=0.55, help="Upper height limit in meters (default: 0.55)")
     parser.add_argument(
@@ -219,6 +226,22 @@ def main() -> None:
             record_path=args.record,
             solver=args.solver,
             controller=args.controller,
+        )
+    elif exp == "gain_sweep":
+        out_fig = args.out or "exp_gain_sweep.png"
+        run_parameter_sensitivity_study(
+            sim_time=args.time or 3.5,
+            dt=args.dt,
+            device=args.device,
+            output_path=out_fig
+        )
+    elif exp in ("chatter_mitigation", "chatter"):
+        out_fig = args.out or "exp_chatter_mitigation.png"
+        run_chatter_mitigation_benchmark(
+            sim_time=args.time or 5.0,
+            dt=args.dt,
+            device=args.device,
+            output_path=out_fig
         )
     elif exp == "all":
         cmd = [sys.executable, "run_all_experiments.py", "--device", args.device]

@@ -21,6 +21,8 @@ from experiments.exp10_parameter_robustness import run_experiment_10
 from experiments.exp11_cartesian_corridor_circle import run_experiment_11, run_experiment_11 as run_corridor
 from experiments.benchmark_solver_latency import run_latency_benchmark
 from experiments.compare_controllers import run_controller_comparison
+from experiments.exp_gain_sweep import run_parameter_sensitivity_study
+from experiments.exp_chatter_mitigation import run_chatter_mitigation_benchmark
 
 __all__ = [
     "run_reach",
@@ -40,5 +42,7 @@ __all__ = [
     "run_corridor",
     "run_latency_benchmark",
     "run_controller_comparison",
+    "run_parameter_sensitivity_study",
+    "run_chatter_mitigation_benchmark",
 ]
 

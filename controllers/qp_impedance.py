@@ -39,7 +39,10 @@ class QPImpedanceController(BaseController):
         kp_null: float = 20.0,
         kd_null: float = 4.0,
         solver_name: str = "daqp",
-        reg_eps: float = 1e-4
+        reg_eps: float = 1e-4,
+        slack_weight: Optional[float] = None,
+        torque_rate_weight: float = 0.0,
+        max_torque_rate: Optional[float] = None,
     ) -> None:
         """
         Initialize the Hierarchical QP Impedance Controller.
@@ -54,6 +57,11 @@ class QPImpedanceController(BaseController):
             kd_null: Null-space posture derivative gain (default fallback task).
             solver_name: Solver plugin name ("daqp", "osqp", "qpoases"). Defaults to "daqp".
             reg_eps: Quadratic regularization weight epsilon for QP objective.
+            slack_weight: Optional quadratic penalty weight rho for soft priority constraints.
+                If None (default), enforces hard equality constraints (Hoffman Eq. 17-18).
+                If float (e.g. 2000.0), soft-penalizes priority deviations to eliminate active-set chattering.
+            torque_rate_weight: Weight for step-to-step torque rate regularization ||tau - tau_prev||^2.
+            max_torque_rate: Maximum torque rate of change in N*m/s for slew-rate limiting.
         """
         super().__init__(n_dofs=n_dofs)
         self.handles_inequalities = True
@@ -76,6 +84,10 @@ class QPImpedanceController(BaseController):
         self.kd_null = kd_null
         self.solver_name = solver_name or "daqp"
         self.reg_eps = reg_eps
+        self.slack_weight = slack_weight
+        self.torque_rate_weight = float(torque_rate_weight)
+        self.max_torque_rate = max_torque_rate
+        self.tau_opt_prev: Optional[np.ndarray] = None
 
         # Feasibility accounting. The paper guarantees tau_cmd stays inside [tau_min, tau_max]
         # without post-hoc clipping; these counters are the evidence for that claim.
@@ -95,6 +107,16 @@ class QPImpedanceController(BaseController):
             n_vars=self.n_dofs,
             solver_name=self.solver_name
         )
+
+    def reset(self) -> None:
+        """Reset internal controller state between simulation runs."""
+        self.tau_opt_prev = None
+        self.n_violations = 0
+        self.n_solves = 0
+        self.max_violation = 0.0
+        self.n_qp_failures = 0
+        self.level_torques = []
+        self.priority_residuals = []
 
     def solve_single_qp(
         self,
@@ -216,6 +238,18 @@ class QPImpedanceController(BaseController):
             lb[crossed] = mid
             ub[crossed] = mid
 
+        # Slew-rate clamping on decision variable tau_opt
+        if self.max_torque_rate is not None and self.max_torque_rate > 0.0 and self.tau_opt_prev is not None:
+            dt = float(state.get("dt", 0.005))
+            dtau_max = self.max_torque_rate * dt
+            lb = np.maximum(lb, self.tau_opt_prev - dtau_max)
+            ub = np.minimum(ub, self.tau_opt_prev + dtau_max)
+            crossed = lb > ub
+            if np.any(crossed):
+                mid = 0.5 * (lb[crossed] + ub[crossed])
+                lb[crossed] = mid
+                ub[crossed] = mid
+
         # Inverse of inertia matrix B
         B_inv = np.linalg.inv(B)
 
@@ -295,13 +329,29 @@ class QPImpedanceController(BaseController):
             H_i = M_i.T @ M_i + self.reg_eps * np.eye(n_dofs)
             g_i = -M_i.T @ target_force_proj               # (n_dofs,)
 
-            # Strict priority: reproduce every higher-priority level's optimum exactly (eq. 17).
-            if prev_A_eq_list:
-                A_eq = np.vstack(prev_A_eq_list)
-                b_eq = np.concatenate(prev_b_eq_list)
-            else:
+            # Torque rate penalty (Delta tau regularization): w_dtau * ||tau - tau_prev||^2
+            if self.torque_rate_weight > 0.0 and self.tau_opt_prev is not None:
+                H_i += self.torque_rate_weight * np.eye(n_dofs)
+                g_i += -self.torque_rate_weight * self.tau_opt_prev
+
+            # Priority constraint handling: Soft Slack Penalty vs Hard Equality
+            if self.slack_weight is not None and self.slack_weight > 0.0:
+                # Soft priority penalty: rho * sum_{j < i} || M_j tau - M_j tau_j* ||^2
+                # Relaxes the strict equality constraint when the feasible polytope pinches against box bounds,
+                # eliminating active-set chattering while preserving priority hierarchy.
+                for M_j, tau_j_opt in zip(prev_A_eq_list, level_torques):
+                    H_i += self.slack_weight * (M_j.T @ M_j)
+                    g_i += -self.slack_weight * (M_j.T @ (M_j @ tau_j_opt))
                 A_eq = None
                 b_eq = None
+            else:
+                # Strict priority: reproduce every higher-priority level's optimum exactly (eq. 17).
+                if prev_A_eq_list:
+                    A_eq = np.vstack(prev_A_eq_list)
+                    b_eq = np.concatenate(prev_b_eq_list)
+                else:
+                    A_eq = None
+                    b_eq = None
 
             tau_i = self.qp_solver.solve(
                 H=H_i, g=g_i, lb=lb, ub=ub,
@@ -332,6 +382,9 @@ class QPImpedanceController(BaseController):
             prev_A_eq_list.append(M_i)
             prev_b_eq_list.append(M_i @ tau_opt)
             level_torques.append(tau_opt.copy())
+
+        # Update previous optimal torque for step-to-step rate penalties
+        self.tau_opt_prev = tau_opt.copy()
 
         # Priority check: did the final solution preserve every higher level's task-space outcome?
         self.level_torques = level_torques
