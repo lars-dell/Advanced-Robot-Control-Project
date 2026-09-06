@@ -7,6 +7,7 @@ and state variable extraction with automatic PyTorch tensor to NumPy array conve
 
 from typing import Dict, Optional, Tuple, Any, List
 from collections import deque
+import logging
 import os
 import pathlib
 import tempfile
@@ -14,6 +15,8 @@ import numpy as np
 import torch
 import genesis as gs
 import mujoco
+
+logger = logging.getLogger("GenesisSim")
 
 
 def resolve_model(model_xml: str) -> str:
@@ -164,6 +167,7 @@ class GenesisSim:
 
         self._arm_dof_dim = 7
         self._f_ext = np.zeros(3, dtype=np.float64)  # pending external disturbance, world frame
+        self._contact_link_idx = None                # resolved lazily, after scene.build()
 
         # ---- Visualization -------------------------------------------------------------------
         # Markers are viewer-only: the goal is a massless, collision-free entity, everything else
@@ -455,9 +459,42 @@ class GenesisSim:
             "ee_force": ee_force_np,
         }
 
+    # Links that can physically carry a contact force, most distal first. `tool_tip` is deliberately
+    # NOT in this list: it is a massless frame with no collision geometry, so Genesis always reports
+    # exactly zero net contact force on it. Reading it was why every contact experiment logged
+    # 0.0 N while the arm was visibly being blocked by the surface - the collision geometry lives on
+    # the `sensor` body (the cylinder tool), which is the link that actually registers the force.
+    _CONTACT_LINK_PREFERENCE = ("sensor", "attachment", "link7", "hand")
+
+    def _resolve_contact_link_idx(self) -> int:
+        """
+        Resolves the local index of the most distal link that can actually register contact.
+
+        Falls back to the configured end-effector link when none of the preferred names exist, which
+        preserves the previous behaviour for models without the cylinder tool.
+        """
+        if getattr(self, "_contact_link_idx", None) is not None:
+            return self._contact_link_idx
+
+        by_name = {getattr(l, "name", ""): getattr(l, "idx_local", -1) for l in self.robot.links}
+        idx = -1
+        for name in self._CONTACT_LINK_PREFERENCE:
+            if by_name.get(name, -1) >= 0:
+                idx = by_name[name]
+                logger.info(f"Contact force will be read from link '{name}' (idx_local={idx})")
+                break
+        if idx < 0:
+            idx = getattr(self.ee_link, "idx_local", -1)
+            logger.warning(
+                f"No preferred contact link found among {self._CONTACT_LINK_PREFERENCE}; "
+                f"falling back to '{getattr(self.ee_link, 'name', '?')}', which may read zero"
+            )
+        self._contact_link_idx = idx
+        return idx
+
     def get_ee_contact_force(self) -> np.ndarray:
         """
-        Extracts net contact force vector acting on the end-effector link in world frame.
+        Extracts net contact force vector acting on the tool's contact link, in the world frame.
 
         Returns:
             np.ndarray: 3D net contact force vector [Fx, Fy, Fz] in N.
@@ -465,11 +502,13 @@ class GenesisSim:
         if hasattr(self.robot, "get_links_net_contact_force"):
             try:
                 F_links = _tensor_to_numpy(self.robot.get_links_net_contact_force())
-                ee_idx = getattr(self.ee_link, "idx_local", -1)
-                if ee_idx >= 0 and ee_idx < len(F_links):
-                    return F_links[ee_idx]
-            except Exception:
-                pass
+                if F_links.ndim == 3:          # (B, n_links, 3) when a batch dim survives
+                    F_links = F_links[0]
+                idx = self._resolve_contact_link_idx()
+                if 0 <= idx < len(F_links):
+                    return np.asarray(F_links[idx], dtype=np.float64)
+            except Exception as exc:
+                logger.warning(f"contact force read failed: {exc}")
         return np.zeros(3, dtype=np.float64)
 
     def apply_external_disturbance(
