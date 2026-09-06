@@ -44,11 +44,11 @@ def build_controller(control_mode: str) -> BaseController:
     if control_mode == "classical_transpose":
         return ClassicalTransposeController(n_dofs=7)
     elif control_mode == "saturated_algebraic":
-        return SaturatedAlgebraicController(n_dofs=7, reg_pinv=1e-4)
+        return SaturatedAlgebraicController(n_dofs=7, reg_pinv=1e-3)
     elif control_mode == "weighted_qp":
-        return WeightedQPController(n_dofs=7, weights=[1.0, 0.3], solver_name="daqp", reg_eps=1e-4)
+        return WeightedQPController(n_dofs=7, weights=[1.0, 0.2, 0.02], solver_name="daqp", reg_eps=1e-2)
     elif control_mode == "hierarchical_qp":
-        return QPImpedanceController(n_dofs=7, solver_name="daqp", reg_eps=1e-4)
+        return QPImpedanceController(n_dofs=7, solver_name="daqp", reg_eps=1e-2, slack_weight=2000.0)
     else:
         raise ValueError(f"Unknown control mode: {control_mode}")
 
@@ -88,17 +88,19 @@ def run_single_controller_sim(
     # Initial state
     state = sim.get_state()
     p_init = state["ee_pos"].copy()
+    q_home = state["q"].copy()
 
-    # Conflicting task definitions:
+    # Conflicting task definitions (Hoffman et al. ICRA 2018 Section V-A):
     # High-Priority Task (Level 0): Periodic sine wave along Z
     z_center = p_init[2]
-    z_amp = 0.06
+    z_amp = 0.05
     z_freq = 0.5  # 0.5 Hz periodic tracking
 
-    # Low-Priority Task (Level 1): Conflicting unreachable XY setpoint
-    xy_target = p_init[:2] + np.array([0.25, 0.20])
+    # Low-Priority Task (Level 1): Strictly unreachable XY setpoint
+    # (radial distance ~0.96m strictly exceeds Franka Panda max reach of 0.855m)
+    xy_target = np.array([0.95, 0.15])
 
-    # Build 2-Level Conflicting Task Stack
+    # Build 3-Level Conflicting Task Stack (Z Priority 0, XY Priority 1, Null-space Posture Priority 2)
     task_stack = TaskStack()
 
     # Level 0 Task: Z-Axis Sine Tracking
@@ -110,26 +112,41 @@ def run_single_controller_sim(
     task_z = CartesianPoseTask(
         name="z_priority_0",
         priority=0,
-        kp=800.0,
-        kd=60.0,
+        kp=400.0,
+        kd=40.0,
         mode="z",
         trajectory_fn=z_traj
     )
     task_stack.add_task(task_z)
 
-    # Level 1 Task: Conflicting XY Target
+    # Level 1 Task: Conflicting Unreachable XY Target with Smooth Ramp
     def xy_traj(t: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        return np.array([xy_target[0], xy_target[1], p_init[2]]), np.eye(3), np.zeros(3)
+        s = min(1.0, max(0.0, t / 1.0))
+        alpha = 0.5 * (1.0 - np.cos(np.pi * s))
+        alpha_dot = (0.5 * np.pi / 1.0) * np.sin(np.pi * s) if s < 1.0 else 0.0
+        xy_curr = p_init[:2] + alpha * (xy_target - p_init[:2])
+        xy_vel = alpha_dot * (xy_target - p_init[:2])
+        return np.array([xy_curr[0], xy_curr[1], p_init[2]]), np.eye(3), np.array([xy_vel[0], xy_vel[1], 0.0])
 
     task_xy = CartesianPoseTask(
         name="xy_priority_1",
         priority=1,
-        kp=500.0,
-        kd=45.0,
+        kp=300.0,
+        kd=30.0,
         mode="xy",
         trajectory_fn=xy_traj
     )
     task_stack.add_task(task_xy)
+
+    # Level 2 Task: Null-Space Posture Stabilization
+    task_posture = JointPostureTask(
+        name="posture_priority_2",
+        priority=2,
+        kp=20.0,
+        kd=10.0,
+        q_des=q_home
+    )
+    task_stack.add_task(task_posture)
 
     n_steps = int(sim_time / dt)
 
@@ -145,7 +162,10 @@ def run_single_controller_sim(
 
         # Current reference point
         z_des = z_center + z_amp * np.sin(2.0 * np.pi * z_freq * t_curr)
-        p_des = np.array([xy_target[0], xy_target[1], z_des])
+        s = min(1.0, max(0.0, t_curr / 1.0))
+        alpha = 0.5 * (1.0 - np.cos(np.pi * s))
+        xy_curr = p_init[:2] + alpha * (xy_target - p_init[:2])
+        p_des = np.array([xy_curr[0], xy_curr[1], z_des])
         state["target_pos"] = p_des
         state["target_vel"] = np.array([0.0, 0.0, 2.0 * np.pi * z_freq * z_amp * np.cos(2.0 * np.pi * z_freq * t_curr)])
 
@@ -232,7 +252,7 @@ def plot_experiment_7(
         ("classical_transpose", axs[0, 0], "Fig 1 Reproduction: Classical Transpose Control (Eq. 9)\n[No Priority Hierarchy - Mutual Task Interference]"),
         ("saturated_algebraic", axs[0, 1], "Fig 2 Reproduction: Saturated Algebraic Null-Space (Eq. 10)\n[Naive Torque Clipping - Nullspace Distortions]"),
         ("weighted_qp", axs[1, 0], "Weighted-Sum QP (Single-Level)\n[Soft Penalties - Secondary Task Pollutes Primary Task]"),
-        ("hierarchical_qp", axs[1, 1], "Fig 4 Reproduction: Proposed Hierarchical Cascade QP (Eq. 18)\n[Strict Priority - Perfect P0 Tracking & Safe Torques]")
+        ("hierarchical_qp", axs[1, 1], "Fig 4 Reproduction: Proposed Hierarchical Cascade QP (Eq. 18)\n[Strict Priority - Clean P0 Tracking & Safe Torques]")
     ]
 
     for mode_key, ax, title in panels:
@@ -241,11 +261,14 @@ def plot_experiment_7(
         p_act = res["p_act"]
         p_des = res["p_des"]
 
+        # Reference workspace reach limit of Franka Emika Panda
+        ax.axhline(0.855, color="gray", linestyle=":", linewidth=1.2, label="Max Reach Boundary (~0.855m)")
+
         # Plot X, Y, Z actual vs desired
-        ax.plot(t, p_des[:, 0], "r--", alpha=0.6, label="x_des (unreachable)")
+        ax.plot(t, p_des[:, 0], "r--", alpha=0.7, label="x_des (unreachable 0.95m)")
         ax.plot(t, p_act[:, 0], "r-", label="x_act")
 
-        ax.plot(t, p_des[:, 1], "g--", alpha=0.6, label="y_des (unreachable)")
+        ax.plot(t, p_des[:, 1], "g--", alpha=0.7, label="y_des (0.15m)")
         ax.plot(t, p_act[:, 1], "g-", label="y_act")
 
         ax.plot(t, p_des[:, 2], "b--", alpha=0.8, linewidth=2, label="z_des (Priority 0)")
@@ -255,7 +278,7 @@ def plot_experiment_7(
         ax.set_ylabel("Cartesian Position [m]")
         ax.set_title(title, fontsize=11, fontweight="bold")
         ax.grid(True)
-        ax.legend(loc="upper right", fontsize=9)
+        ax.legend(loc="upper right", fontsize=8)
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=200)
