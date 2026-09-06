@@ -12,9 +12,10 @@ Demonstrates Multi-Priority QP Impedance Control with Obstacle Constraints:
 import argparse
 import logging
 import os
+import pathlib
 import sys
 import time
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
@@ -35,7 +36,10 @@ def run_experiment_2(
     show_viewer: bool = True,
     device: str = "cpu",
     desired_force: float = -10.0,
-    save_plot: bool = True
+    save_plot: bool = True,
+    kp_cart: float = 600.0,
+    kd_cart: float = 50.0,
+    out_path: Optional[str] = None
 ) -> Dict[str, np.ndarray]:
     """
     Executes Experiment 2: Surface Circle Trajectory with Blocking Obstacle Box.
@@ -107,11 +111,14 @@ def run_experiment_2(
     task_stack = TaskStack()
 
     # Priority 0: Planar Circular Trajectory Tracking in XY (Highest Priority)
+    # kp_cart is the commanded Cartesian stiffness whose rendering we are measuring: when the
+    # obstacle blocks the path, the steady interaction force should equal kp_cart times the
+    # deflection the task sees (commanded minus achieved).
     cart_task = CartesianPoseTask(
         name="circle_xy_p0",
         priority=0,
-        kp=600.0,
-        kd=50.0,
+        kp=kp_cart,
+        kd=kd_cart,
         mode="xy",
         trajectory_fn=traj_gen
     )
@@ -151,6 +158,9 @@ def run_experiment_2(
     log_ee_pos_des: List[np.ndarray] = []
     log_contact_force: List[np.ndarray] = []
     log_torques: List[np.ndarray] = []
+    # Strict priority has only ever been measured in free space. Logging it here answers whether
+    # the guarantee survives an external force the controller never modelled.
+    log_priority_residuals: List[np.ndarray] = []
     log_xy_error: List[float] = []
     log_x_error: List[float] = []
     log_y_error: List[float] = []
@@ -190,6 +200,9 @@ def run_experiment_2(
         log_ee_pos_des.append(p_des.copy())
         log_contact_force.append(f_meas.copy())
         log_torques.append(torques.copy())
+        log_priority_residuals.append(
+            np.asarray(getattr(controller, "priority_residuals", []), dtype=float)
+        )
         log_xy_error.append(xy_err)
         log_x_error.append(x_err)
         log_y_error.append(y_err)
@@ -214,6 +227,10 @@ def run_experiment_2(
         "ee_pos_des": np.array(log_ee_pos_des),
         "contact_force": np.array(log_contact_force),
         "torques": np.array(log_torques),
+        "kp_cart": float(kp_cart),
+        "kd_cart": float(kd_cart),
+        "n_violations": getattr(controller, "n_violations", -1),
+        "n_solves": getattr(controller, "n_solves", -1),
         "xy_error": np.array(log_xy_error),
         "x_error": np.array(log_x_error),
         "y_error": np.array(log_y_error),
@@ -221,6 +238,16 @@ def run_experiment_2(
         "force_error": np.array(log_force_error),
         "posture_error": np.array(log_posture_error),
     }
+
+    res = log_priority_residuals
+    if res and len({r.shape[0] for r in res}) == 1:
+        logs["priority_residuals"] = np.array(res)
+
+    if out_path:
+        out = pathlib.Path(out_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(out, **logs)
+        logger.info(f"Logs written to {out}")
 
     if save_plot:
         plot_experiment_2(logs, surface_box_cfg, obstacle_box_cfg, circle_center, radius)
