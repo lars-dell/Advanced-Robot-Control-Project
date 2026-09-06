@@ -60,10 +60,20 @@ def compute_metrics(
     logs: Dict[str, Any],
     dt: float = 0.005,
     scenario: str = "conflict",
-    priority_order: Sequence[str] = ("x", "y", "z")
+    priority_order: Sequence[str] = ("x", "y", "z"),
+    activity_tol: float = 0.1
 ) -> Dict[str, float]:
     """
     Extracts quantitative evaluation metrics from simulation logs.
+
+    Args:
+        logs: Telemetry dictionary from a scenario run.
+        dt: Control timestep, used for the torque-rate chatter metric.
+        scenario: Scenario name (recorded for provenance).
+        priority_order: Axis ranking, highest priority first, used to attribute per-level RMSE.
+        activity_tol: Distance from a torque bound, in N*m, within which that bound counts as
+            active. 0.1 N*m is ~0.8% of the 12 N*m wrist limit and ~0.1% of the 87 N*m proximal
+            limit, so it registers genuine saturation without firing on ordinary large torques.
     """
     t = logs["time"]
     p_act = logs["ee_pos"]
@@ -95,6 +105,31 @@ def compute_metrics(
     overshoot_upper = np.maximum(0.0, torques - tau_max)
     max_overshoot = float(np.max(np.maximum(overshoot_lower, overshoot_upper)))
 
+    # Constraint ACTIVITY, which is independent of constraint violation: a run can score zero
+    # violations while the bounds never engage at all. Requirement 5 of the brief asks for the
+    # torque constraints to *become active*, so a torque plot that never touches a bound does not
+    # demonstrate it, however clean it looks. Counted as the fraction of control steps in which at
+    # least one joint sits within `activity_tol` of either of its bounds.
+    near_upper = torques >= (tau_max - activity_tol)
+    near_lower = torques <= (tau_min + activity_tol)
+    active_steps = np.any(near_upper | near_lower, axis=1)
+    constraint_activity_pct = 100.0 * float(np.mean(active_steps))
+    # Which joints actually saturate matters: joint 7 has a zero lever arm to the tool tip and can
+    # never be driven to its bound by a Cartesian position task, so it should never appear here.
+    per_joint_activity_pct = (100.0 * np.mean(near_upper | near_lower, axis=0)).tolist()
+
+    # Strict-priority evidence (Hoffman eq. 17/18). || J_k B^-1 (tau_final - tau_k*) || should sit
+    # at solver tolerance when priority is enforced as a hard equality; it grows by orders of
+    # magnitude when the cascade is relaxed with a slack penalty instead. This is the only metric
+    # that separates the hierarchical controller from the weighted-sum baseline.
+    residuals = logs.get("priority_residuals", None)
+    if residuals is not None and np.size(residuals) > 0:
+        max_priority_residual = float(np.max(np.abs(residuals)))
+        mean_priority_residual = float(np.mean(np.abs(residuals)))
+    else:
+        max_priority_residual = float("nan")
+        mean_priority_residual = float("nan")
+
     # Actuator effort: mean ||tau||
     effort = float(np.mean(np.linalg.norm(torques, axis=1)))
     smoothness = compute_smoothness(torques, dt)
@@ -114,6 +149,12 @@ def compute_metrics(
         "violation_pct": violation_pct,
         "mean_effort": effort,
         "smoothness_chatter": smoothness,
+        "constraint_activity_pct": constraint_activity_pct,
+        "per_joint_activity_pct": per_joint_activity_pct,
+        "max_priority_residual": max_priority_residual,
+        "mean_priority_residual": mean_priority_residual,
+        # A violation count is uninterpretable without the tolerance that produced it.
+        "violation_tol": float(logs.get("violation_tol", float("nan"))),
     }
 
 
@@ -125,33 +166,52 @@ def print_comparison_table(
     """
     Prints a formatted executive summary comparison table to stdout and logger.
     """
+    width = 132
     header = (
-        f"\n{'='*108}\n"
+        f"\n{'='*width}\n"
         f"  MULTI-CONTROLLER BENCHMARK COMPARISON SUMMARY: Scenario [{scenario.upper()}]  \n"
         f"  Priority Order: {' > '.join(priority_order).upper()} | Evaluation of Hoffman et al. ICRA 2018  \n"
-        f"{'='*108}\n"
-        f"{'Controller':<38} | {'P0 RMSE [m]':<11} | {'P1 RMSE [m]':<11} | {'Violations':<10} | {'Max Ov [Nm]':<11} | {'Chatter [Nm/s]':<14}\n"
-        f"{'-'*108}"
+        f"{'='*width}\n"
+        f"{'Controller':<38} | {'P0 RMSE [m]':<11} | {'P1 RMSE [m]':<11} | {'Violations':<10} | "
+        f"{'Max Ov [Nm]':<11} | {'Chatter [Nm/s]':<14} | {'Bnd act [%]':<11} | {'Prio resid':<10}\n"
+        f"{'-'*width}"
     )
     logger.info(header)
     print(header)
 
     for ctrl_key, m in all_metrics.items():
         name = CONTROLLER_DISPLAY_NAMES.get(ctrl_key, ctrl_key)
+        resid = m.get("max_priority_residual", float("nan"))
+        resid_str = "     n/a  " if not np.isfinite(resid) else f"{resid:10.2e}"
         line = (
             f"{name:<38} | "
             f"{m['rmse_p0']:11.4f} | "
             f"{m['rmse_p1']:11.4f} | "
             f"{int(m['n_violations']):4d} ({m['violation_pct']:4.1f}%) | "
             f"{m['max_overshoot']:11.2f} | "
-            f"{m['smoothness_chatter']:14.2f}"
+            f"{m['smoothness_chatter']:14.2f} | "
+            f"{m.get('constraint_activity_pct', float('nan')):11.1f} | "
+            f"{resid_str}"
         )
         logger.info(line)
         print(line)
 
-    footer = f"{'='*108}\n"
-    logger.info(footer)
-    print(footer)
+    # Both added columns are easy to misread, so state what they mean rather than relying on the
+    # header abbreviations.
+    tol = next((m.get("violation_tol") for m in all_metrics.values()
+                if np.isfinite(m.get("violation_tol", float("nan")))), float("nan"))
+    notes = (
+        f"{'-'*width}\n"
+        f"  Bnd act [%]: share of control steps with >=1 joint within 0.1 Nm of a torque bound.\n"
+        f"               Independent of 'Violations': 0 violations with 0% activity means the\n"
+        f"               constraints never engaged, so requirement 5 is NOT demonstrated.\n"
+        f"  Prio resid : max || J_k B^-1 (tau_final - tau_k*) ||. ~1e-14 = strict priority held\n"
+        f"               exactly; orders of magnitude larger = the cascade was relaxed by slack.\n"
+        f"  Violations measured at violation_tol = {tol:.1e} Nm.\n"
+        f"{'='*width}\n"
+    )
+    logger.info(notes)
+    print(notes)
 
 
 def plot_comparison(

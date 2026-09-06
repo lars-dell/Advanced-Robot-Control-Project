@@ -48,7 +48,14 @@ def build_controller(control_mode: str) -> BaseController:
     elif control_mode == "weighted_qp":
         return WeightedQPController(n_dofs=7, weights=[1.0, 0.2, 0.02], solver_name="daqp", reg_eps=1e-2)
     elif control_mode == "hierarchical_qp":
-        return QPImpedanceController(n_dofs=7, solver_name="daqp", reg_eps=1e-2, slack_weight=2000.0)
+        # slack_weight MUST stay None here. This panel exists to demonstrate that priority is
+        # enforced as a hard equality (eq. 17/18); running it with a quadratic slack penalty
+        # relaxes exactly the property the figure is meant to prove, and makes the comparison
+        # against the weighted-sum QP baseline meaningless - both would then be weighted methods.
+        # Measured on the `conflict` scenario: strict priority holds the cascade residual at
+        # 7.8e-11 (qpOASES) / 4.0e-08 (daqp). If a slack penalty is ever needed to keep this
+        # experiment feasible, that is a reportable finding and must be stated, not silently set.
+        return QPImpedanceController(n_dofs=7, solver_name="daqp", reg_eps=1e-2, slack_weight=None)
     else:
         raise ValueError(f"Unknown control mode: {control_mode}")
 
@@ -97,7 +104,18 @@ def run_single_controller_sim(
     z_freq = 0.5  # 0.5 Hz periodic tracking
 
     # Low-Priority Task (Level 1): Strictly unreachable XY setpoint
-    # (radial distance ~0.96m strictly exceeds Franka Panda max reach of 0.855m)
+    # WARNING - this target may not actually be unreachable; verify before trusting this panel.
+    # The original justification here ("radial distance ~0.96m strictly exceeds Franka Panda max
+    # reach of 0.855m") is wrong twice over. 855 mm is the datasheet *horizontal flange* reach; the
+    # relevant quantity is the 3-D radius to the tool tip, which includes the 0.333 m base height
+    # and the 0.21 m cylinder tool. scripts/probe_genesis.py measured a reachable radius of
+    # >= 1.267 m for this model. With z_center = 0.4853 m (the home tool-tip height), this target
+    # sits at a 3-D radius of only 1.06-1.10 m - INSIDE the measured reachable set.
+    # Reachability is not purely radial (the joint-4 limit [-3.0718, -0.0698] means the arm cannot
+    # fully straighten, so the reachable set is not a sphere), so it may still be unreachable in
+    # this particular direction - but that has to be shown, not assumed. If the XY task converges,
+    # there is no conflict here and this experiment is not demonstrating what it claims.
+    # For comparison, the `conflict` scenario targets a 1.51 m radius, which is unambiguous.
     xy_target = np.array([0.95, 0.15])
 
     # Build 3-Level Conflicting Task Stack (Z Priority 0, XY Priority 1, Null-space Posture Priority 2)

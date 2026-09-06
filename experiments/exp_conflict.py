@@ -2,8 +2,16 @@
 Experiment: Conflicting Objectives & Task Priority Hierarchy Trade-off Scenario.
 
 Reproduction of Section V-A from Hoffman et al. (IEEE ICRA 2018):
-Target [1.30, 0.15, 0.75] m is selected such that the X coordinate is out of reach
-(~0.93 m maximum reachable extension), while Y and Z are fully reachable.
+Target [1.30, 0.15, 0.75] m sits at a radius of 1.51 m from the base origin, against a measured
+reachable radius of >= 1.267 m for this model (tool tip, 404 sampled configurations plus
+hand-picked near-extension poses; see scripts/probe_genesis.py). The target is therefore genuinely
+unreachable, while its Y and Z components individually are not.
+
+NOTE: an earlier version of this docstring justified the conflict with a "~0.93 m maximum
+reachable extension". That figure is wrong for this model - it is close to the 855 mm datasheet
+*horizontal flange* reach, whereas the relevant quantity is the 3-D radius to the tool tip, which
+includes the 0.333 m base height and the 0.21 m cylinder tool. The conclusion is unchanged; only
+the stated reason was incorrect.
 
 Demonstrates that the priority order decides which task is sacrificed:
     - Priority order x > y > z: X reach is prioritized; Z height sags to absorb the shortfall.
@@ -29,6 +37,24 @@ from controllers import make_controller, BaseController
 from tasks import TaskStack, CartesianPoseTask, JointPostureTask
 
 logger = logging.getLogger("ExpConflict")
+
+
+def _stack_residuals(residuals: List[np.ndarray]) -> Dict[str, np.ndarray]:
+    """
+    Stacks the per-step priority-residual vectors into one (n_steps, n_levels) array.
+
+    Returns an empty dict when nothing was recorded, or when the level count varied between steps
+    (which would mean the task stack changed mid-run and the array would be meaningless).
+    """
+    if not residuals:
+        return {}
+    widths = {r.shape[0] for r in residuals}
+    if len(widths) != 1:
+        logger.warning(
+            f"priority-residual level count varied across steps ({sorted(widths)}); not logging it"
+        )
+        return {}
+    return {"priority_residuals": np.array(residuals)}
 
 
 def run_conflict(
@@ -130,6 +156,10 @@ def run_conflict(
     log_torques: List[np.ndarray] = []
     log_errors: List[float] = []
     log_task_errors: List[Dict[str, float]] = []
+    # || J_k B^-1 (tau_final - tau_k*) || per priority level, every step. The controller recomputes
+    # this each call and overwrites it, so without capturing it here only the final step survives.
+    # This is the evidence that priority is enforced exactly rather than as a weighting.
+    log_priority_residuals: List[np.ndarray] = []
 
     for step in range(n_steps):
         t_curr = step * dt
@@ -152,6 +182,9 @@ def run_conflict(
         log_torques.append(torques.copy())
         log_errors.append(err)
         log_task_errors.append(stack.get_task_errors(state))
+        log_priority_residuals.append(
+            np.asarray(getattr(controller, "priority_residuals", []), dtype=float)
+        )
 
         if step % 100 == 0:
             errs = " ".join(f"{k}={v:.3f}" for k, v in log_task_errors[-1].items())
@@ -177,6 +210,15 @@ def run_conflict(
         "n_violations": controller.n_violations,
         "n_solves": controller.n_solves,
         "max_violation": controller.max_violation,
+        # Provenance: a violation count is meaningless without the tolerance it was measured at,
+        # and the solver changed under this project once already (qpOASES -> daqp, commit 5ac5d65).
+        "violation_tol": getattr(controller, "violation_tol", float("nan")),
+        "solver_name": np.array(str(getattr(controller, "solver_name", "unknown"))),
+        "slack_weight": (float(controller.slack_weight)
+                         if getattr(controller, "slack_weight", None) is not None
+                         else float("nan")),
+        "n_qp_failures": getattr(controller, "n_qp_failures", -1),
+        **_stack_residuals(log_priority_residuals),
     }
 
     if out_file:
