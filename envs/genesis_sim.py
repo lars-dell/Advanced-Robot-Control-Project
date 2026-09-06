@@ -239,6 +239,29 @@ class GenesisSim:
         # Add ground plane entity
         self.plane = self.scene.add_entity(gs.morphs.Plane())
 
+        def _surface(color, opacity=None, kind="rough"):
+            """
+            Builds a coloured surface, optionally see-through.
+
+            Marker geometry such as the height-corridor plates has to be visible without hiding the
+            tool behind it, so those are given an opacity < 1. Genesis takes opacity in [0, 1] on the
+            surface, where 1.0 is fully opaque; omitting it leaves real obstacles opaque.
+
+            `kind="glass"` selects a glass-like surface for boundary planes the tool passes behind.
+            """
+            kwargs = dict(diffuse_texture=gs.textures.ColorTexture(color=color))
+            if opacity is not None:
+                kwargs["opacity"] = float(np.clip(opacity, 0.0, 1.0))
+            if kind == "glass":
+                try:
+                    return gs.surfaces.Glass(color=tuple(color), **(
+                        {"opacity": kwargs["opacity"]} if "opacity" in kwargs else {}))
+                except Exception as exc:
+                    # Not every backend renders the Glass BSDF; a translucent Rough surface reads
+                    # almost identically in the rasterised viewer.
+                    logger.warning(f"Glass surface unavailable ({exc}); using translucent Rough")
+            return gs.surfaces.Rough(**kwargs)
+
         # Add optional custom box obstacles / contact surfaces
         self.surface_box = None
         self.obstacle_box = None
@@ -249,9 +272,13 @@ class GenesisSim:
                 b_col = b_cfg.get("color", (0.8, 0.8, 0.8))
                 b_collision = b_cfg.get("collision", True)
                 b_vis_contact = b_cfg.get("visualize_contact", b_collision)
+                # Non-colliding boxes are visual markers; default them to see-through so they do
+                # not occlude the tool they are meant to annotate.
+                b_opacity = b_cfg.get("opacity", None if b_collision else 0.25)
+                b_surface = b_cfg.get("surface", "rough")
                 b_ent = self.scene.add_entity(
                     gs.morphs.Box(pos=b_pos, size=b_size, fixed=True, collision=b_collision),
-                    surface=gs.surfaces.Rough(diffuse_texture=gs.textures.ColorTexture(color=b_col)),
+                    surface=_surface(b_col, b_opacity, b_surface),
                     visualize_contact=b_vis_contact
                 )
                 if self.surface_box_cfg is not None and b_cfg.get("pos") == self.surface_box_cfg.get("pos"):
@@ -268,9 +295,10 @@ class GenesisSim:
                 sph_col = s_cfg.get("color", (1.0, 0.4, 0.0))
                 sph_collision = s_cfg.get("collision", True)
                 sph_vis_contact = s_cfg.get("visualize_contact", sph_collision)
+                sph_opacity = s_cfg.get("opacity", None if sph_collision else 0.25)
                 s_ent = self.scene.add_entity(
                     gs.morphs.Sphere(pos=sph_pos, radius=sph_radius, fixed=True, collision=sph_collision),
-                    surface=gs.surfaces.Rough(diffuse_texture=gs.textures.ColorTexture(color=sph_col)),
+                    surface=_surface(sph_col, sph_opacity),
                     visualize_contact=sph_vis_contact
                 )
                 if self.obstacle_sphere_cfg is not None and s_cfg.get("pos") == self.obstacle_sphere_cfg.get("pos"):

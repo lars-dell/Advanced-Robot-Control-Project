@@ -95,7 +95,10 @@ def run_experiment_11(
     record_path: Optional[str] = None,
     save_plot: bool = True,
     solver: str = "daqp",
-    controller: Union[str, BaseController] = "hierarchical_qp"
+    controller: Union[str, BaseController] = "hierarchical_qp",
+    enable_corridor: bool = True,
+    barrier_kp: float = 1200.0,
+    barrier_kd: float = 80.0
 ) -> Dict[str, np.ndarray]:
     """
     Executes Experiment 11: Prioritized Height Corridor with Out-of-Bounds Circle Tracking.
@@ -124,23 +127,41 @@ def run_experiment_11(
     logger.info(f"Running Exp 11: Prioritized Z-Corridor [{z_min:.2f}, {z_max:.2f}]m & Out-of-Bounds Circle [Solver: {solver}]")
     logger.info("================================================================================")
 
-    # Visual boundary corridor plates in Genesis (purely visual overlays, NO hitbox)
-    boxes = [
-        # Translucent Ceiling Plate at z = z_max
-        {
-            "pos": (0.65, 0.0, z_max + 0.005),
-            "size": (0.60, 0.60, 0.01),
-            "color": (0.2, 0.5, 0.9),
-            "collision": False
-        },
-        # Translucent Floor Plate at z = z_min
-        {
-            "pos": (0.65, 0.0, z_min - 0.005),
-            "size": (0.60, 0.60, 0.01),
-            "color": (0.9, 0.4, 0.2),
-            "collision": False
-        }
-    ]
+    # Visual boundary markers (purely visual overlays, NO hitbox).
+    #
+    # These were previously solid 0.6 x 0.6 m plates, which mark the corridor correctly but hide the
+    # tool behind them -- the tool spends the whole run between the two boundaries, which is exactly
+    # where the sheets are. Drawn instead as open rectangular frames: four thin bars per boundary,
+    # so the height is unmistakable while the interior stays completely clear.
+    def _corridor_boundary(z, color, span=0.60, centre_x=0.65, bar=0.003, n_grid=5):
+        """
+        One boundary of the height corridor, drawn as a thin open mesh.
+
+        NOTE: Genesis only honours surface `opacity` in the ray-traced renderer -- it appears nowhere
+        in the rasterizer that drives the interactive viewer, so a translucent or glass sheet still
+        renders fully opaque on screen and hides the tool behind it. Transparency is not available
+        live, so the plane is built from geometry that cannot occlude.
+
+        The border lines are simply the outermost lines of the grid, at the same thickness as the
+        rest: a separate heavier rim reads as a frame around the plane rather than as its edge.
+        `n_grid` counts interior lines, so each direction draws n_grid + 2 lines including the two
+        borders, evenly spaced.
+        """
+        h = span / 2.0
+        n_lines = n_grid + 2                      # interior lines plus the two borders
+        parts = []
+        for i in range(n_lines):
+            off = -h + (i / (n_lines - 1)) * span  # inclusive of both edges
+            parts.append({"pos": (centre_x + off, 0.0, z), "size": (bar, span, bar)})
+            parts.append({"pos": (centre_x, off, z), "size": (span, bar, bar)})
+
+        for pt in parts:
+            pt.update(color=color, collision=False, opacity=1.0)
+        return parts
+
+    # Blue ceiling at z_max, orange floor at z_min.
+    boxes = (_corridor_boundary(z_max, (0.15, 0.45, 0.95))
+             + _corridor_boundary(z_min, (0.95, 0.40, 0.15)))
 
     sim = GenesisSim(
         model_xml="panda_cylinder.xml",
@@ -190,16 +211,29 @@ def run_experiment_11(
     # - Priority 1 (Secondary Tracking): Joint Posture Regularization Task
     task_stack = TaskStack()
 
-    z_boundary_task = ZBoundaryTask(
-        name="z_corridor_ineq",
-        priority=0,
-        z_min=z_min,
-        z_max=z_max,
-        nominal_z_fn=nominal_z_fn,
-        as_inequality=True,
-        omega_n=35.0
-    )
-    task_stack.add_task(z_boundary_task)
+    # The corridor is NOT a priority level. For controllers that accept inequalities it contributes
+    # a zero-row Jacobian to the cost hierarchy and enters instead as the QP constraint
+    # b_l <= J_z B^-1 tau <= b_u, which binds at every level -- stronger than priority 0. For
+    # controllers that cannot express inequalities it degrades to a barrier spring-damper, which is
+    # what makes the cross-controller comparison like-for-like.
+    #
+    # `enable_corridor=False` removes it entirely. That ablation is the only thing that shows the
+    # constraint is what keeps the tool inside the corridor, rather than the trajectory happening to
+    # stay there.
+    z_boundary_task = None
+    if enable_corridor:
+        z_boundary_task = ZBoundaryTask(
+            name="z_corridor_ineq",
+            priority=0,
+            z_min=z_min,
+            z_max=z_max,
+            nominal_z_fn=nominal_z_fn,
+            as_inequality=True,
+            omega_n=35.0,
+            kp=barrier_kp,
+            kd=barrier_kd
+        )
+        task_stack.add_task(z_boundary_task)
 
     circle_3d_task = CartesianPoseTask(
         name="circle_3d_p0",
@@ -271,18 +305,19 @@ def run_experiment_11(
         log_ee_pos.append(p_curr.copy())
         log_ee_pos_des.append(p_des.copy())
         log_torques.append(torques.copy())
-        log_ceiling_active.append(z_boundary_task.ceiling_active)
-        log_floor_active.append(z_boundary_task.floor_active)
+        # With the corridor ablated there is no task to query; log it as never active.
+        log_ceiling_active.append(z_boundary_task.ceiling_active if z_boundary_task else False)
+        log_floor_active.append(z_boundary_task.floor_active if z_boundary_task else False)
         log_ceiling_err.append(ceil_err)
         log_floor_err.append(flr_err)
         log_circle_err.append(circ_err)
         log_posture_err.append(post_err)
 
         if step % 200 == 0:
-            status = "CORRIDOR_FREE"
-            if z_boundary_task.ceiling_active:
+            status = "CORRIDOR_FREE" if z_boundary_task else "CORRIDOR_OFF"
+            if z_boundary_task and z_boundary_task.ceiling_active:
                 status = f"CEILING_CLAMP (vio={ceil_err*1000:.1f}mm)"
-            elif z_boundary_task.floor_active:
+            elif z_boundary_task and z_boundary_task.floor_active:
                 status = f"FLOOR_CLAMP   (vio={flr_err*1000:.1f}mm)"
             max_tau = np.max(np.abs(torques))
             logger.info(
