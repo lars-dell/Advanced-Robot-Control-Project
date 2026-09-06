@@ -118,6 +118,27 @@ class ZBoundaryTask(BaseTask):
         a_min_discrete = (2.0 / (dt * dt)) * d_flr - (2.0 / dt) * v_z
         bl_val = max(a_min_cbf, a_min_discrete)
 
+        # Convective operational acceleration offset:
+        # Since ddz = J_z ddq + dJ_z dq = J_z B^-1 tau + dJ_z dq,
+        # the acceleration bounds b_l <= ddz <= b_u map to torque space as:
+        #     b_l - dJ_z dq <= J_z B^-1 tau <= b_u - dJ_z dq
+        dJ_dq = state.get("dJ_dq", None)
+        if dJ_dq is not None and len(dJ_dq) > 2:
+            dJ_dq_z = float(dJ_dq[2])
+        else:
+            dJ_dq_z = 0.0
+
+        bu_val -= dJ_dq_z
+        bl_val -= dJ_dq_z
+
+        # Actuator feasibility and kinematic singularity safeguard:
+        # When J_z -> 0 (loss of vertical control authority), A_ineq -> 0.
+        # Ensure 0 <= bu and bl <= 0 so 0*tau remains feasible when authority is lost.
+        norm_A = float(np.linalg.norm(A_ineq))
+        if norm_A < 1e-4:
+            bu_val = max(bu_val, 0.0)
+            bl_val = min(bl_val, 0.0)
+
         # Numerical safeguard against numerical overlap
         if bl_val > bu_val:
             mid = 0.5 * (bl_val + bu_val)
