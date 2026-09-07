@@ -292,6 +292,245 @@ Notes:
 
 ---
 
+## Experiments behind the report
+
+The benchmark suite below contains eleven experiments. **Five runs back a specific claim in the
+report**; the rest are exploratory. This section says which is which, what each one demonstrates,
+and what it does *not*.
+
+All numbers were measured on 6 September 2026, on the `daqp` solver, and every one of them is
+recorded with its provenance in `docs/EVALUATION_FRAMEWORK.md`.
+
+### 1 · `conflict` — strict priority, and torque limits under load
+
+```bash
+uv run python main.py --no-vis --exp conflict --priority-order xyz --time 7
+uv run python main.py --no-vis --exp conflict --priority-order zyx --time 7
+```
+
+Three one-dimensional Cartesian objectives compete for a target at 1.51 m, beyond the measured
+reachable radius, so the ranking alone decides which is sacrificed. This one run carries most of the
+report: requirements 2, 3, 4, 5 and 7.
+
+| What | Measured |
+| :--- | :--- |
+| Priority residual `‖J_k B⁻¹(τ − τ*_k)‖` | **4.0·10⁻⁸** — against **72.1** for a weighted-sum QP solving the identical tasks with the identical solver |
+| Priority swap | `x>y>z` → x 0.373 / z 0.324 &nbsp;·&nbsp; `z>y>x` → x 0.461 / z **0.0000** |
+| Torque-limit violations | **0** in 1,400 steps, at a tolerance of 1·10⁻⁴ N·m, with no clipping |
+| Constraint *activity* | ≥1 joint on a bound in **92.5 %** of steps |
+
+The residual is the number that matters. It is what separates a hierarchy from a weighting.
+
+![Priority residual over time, cascade against weighted-sum QP](docs/media/priority_residual.png)
+
+**Note the logarithmic axis** — the two controllers are eleven orders of magnitude apart, solving
+the same tasks with the same solver. The cascade holds a median residual of 1.9·10⁻¹¹, at solver
+tolerance; the weighted-sum QP sits at 2.9, meaning it silently trades priority-0 accuracy away
+whenever its weights favour doing so. This is the clearest single piece of evidence that the
+hierarchy is enforced as a constraint rather than approximated by a cost.
+
+![Worst-joint torque utilisation against the bounds](docs/media/fig_torque_bounds.png)
+
+Utilisation is `max_j |τ_j| / τ_max,j`, so unity *is* the bound and the shaded region is infeasible.
+The proposed cascade rides the limit continuously without crossing it; the transpose law leaves the
+feasible set; the weighted-sum QP never uses the budget available to it. The activity figure is separate from the violation
+count on purpose — zero violations is equally consistent with "the limits worked" and "we never went
+near them", and only the second number tells them apart.
+
+**Caveat.** Priority does not make an unreachable task reachable. x still fails by 0.373 m even at
+the top of the stack; what the ranking buys is 0.373 instead of 0.461.
+
+### 2 · `compare` — against the three classical formulations
+
+```bash
+uv run python main.py --no-vis --exp compare --scenario conflict --priority-order xyz --time 7
+```
+
+The same task stack under four controllers, reproducing Figs. 1–4 of the paper. This is where the
+Dietrich null-space method enters as the classical baseline the assignment suggests.
+
+| Controller | P0 RMSE [m] | Violations | Max overshoot |
+| :--- | ---: | ---: | ---: |
+| **Hierarchical QP, eq. (18)** | **0.3981** | **0** | **0.00 N·m** |
+| Weighted-sum QP | 0.4128 | 0 | 0.00 N·m |
+| Null-space projection, eq. (10) | 0.4084 | 453 | 0.00 N·m |
+| Classical transpose, eq. (9) | 0.5627 | 13 | **59.86 N·m** |
+
+The transpose law exceeding its bound by 59.9 N·m is the paper's Fig. 1; the null-space method
+violating on a third of steps is its Fig. 3.
+
+**Caveat, and it matters.** The tracking advantage over the weighted-sum QP is **3.6 %** — within
+what re-tuning either controller would produce. Do not read this table as "the QP tracks better". It
+tracks about the same and is the only one that stays feasible.
+
+![Highest-priority task tracking for the four controllers](docs/media/fig_primary_task.png)
+
+All four are held short of the unreachable reference; the transpose law stalls furthest from it.
+What the figure cannot show is the difference that matters — feasibility — which is the violation
+column of the table above.
+
+### 3 · `corridor` — the general inequality constraint of eq. (18)
+
+```bash
+uv run python main.py --no-vis --exp corridor
+```
+
+Everything above exercises the QP's *cost* and its *box bounds* on τ. Only this run uses the general
+row `b_l ≤ Aτ ≤ b_u`. A height corridor z ∈ [0.35, 0.55] m is imposed while a circular reference
+deliberately commands heights outside it.
+
+| Configuration | Max excursion beyond the corridor |
+| :--- | ---: |
+| Hierarchical QP (hard inequality) | **0.01 mm** |
+| Weighted-sum QP (hard inequality) | **0.01 mm** |
+| Null-space, eq. (10) (barrier fallback) | 15.07 mm |
+| Transpose, eq. (9) (barrier fallback) | 20.64 mm |
+| **Constraint ablated entirely** | **84 mm** |
+
+The ablation row is what makes the rest meaningful — without it, "the tool stayed inside" could just
+mean the trajectory did. The classical laws cannot express an inequality at all, so the same
+objective degrades to a barrier spring-damper for them.
+
+Stiffening that barrier 33× narrows the gap to 0.92 mm, but only by commanding **103.5 N·m against
+an 87 N·m limit** — it buys corridor accuracy by leaving the feasible set. That is the real point: a
+penalty gives you accuracy *or* feasibility and lets you trade between them, while the QP satisfies
+both because both are constraints.
+
+**Caveat.** The control barrier function filling eq. (18)'s constraint slot is ours, not the
+paper's — eq. (18) supplies the slot. And the constraint drops the convective `J̇q̇` term because
+Genesis exposes no `J̇`, so the 0.01 mm is an empirical result, not a proof of a strict bound.
+
+![End-effector height against the commanded corridor](docs/media/corridor_height.png)
+
+**The red trace is the control.** With the constraint removed the arm follows the reference straight
+out of the corridor, which is what makes the other traces mean anything — otherwise "the tool stayed
+inside" could simply be a trajectory that never left. The QP flattens exactly on the boundary and
+resumes tracking on re-entry; the barrier fallback, which is the best a projection method can do
+with an objective it cannot express as a constraint, overshoots on every excursion.
+
+<p align="center">
+  <img src="docs/media/corridor.gif" width="480" alt="Tool tip held inside the height corridor">
+</p>
+
+The blue mesh is the ceiling at z = 0.55 m, the orange one the floor at 0.35 m; both are visual
+markers with no collision geometry, so nothing mechanical stops the arm. **Watch the tool tip rise
+until it meets the blue plane and then travel along it** while the commanded reference keeps
+climbing past. Reproduce with:
+
+```bash
+uv run python main.py --exp corridor --record docs/media/corridor.gif --time 10
+```
+
+### 4 · `blocked_circle` — does the arm render the stiffness it was told to?
+
+```bash
+uv run python main.py --no-vis --exp blocked_circle
+```
+
+An obstacle the controller knows nothing about blocks a commanded circular path. In steady contact
+the exerted force should equal the commanded stiffness times the deflection the task sees.
+
+| Commanded `kp` [N/m] | Δx [mm] | F_x [N] | Rendered K [N/m] | ratio |
+| ---: | ---: | ---: | ---: | ---: |
+| 300 | 35.4 | 15.2 | 428 | 1.43 |
+| 600 | 23.9 | 17.6 | 739 | 1.23 |
+| 1200 | 16.2 | 22.9 | 1418 | 1.18 |
+
+The sweep is the point: a single operating point would only show that *some* force appears. Across a
+fourfold range the arm reproduces a *commanded* impedance. Surface friction was the obvious
+contaminant and was tested — varying the normal press 12.5× moves the ratio only 9 %, so friction
+explains almost none of the excess.
+
+This run also answers something the paper does not address: the priority guarantee bounds the QP
+solution, but says nothing about forces the controller never modelled. Measured through the
+collision, the residual holds at **1.4·10⁻¹⁴** — machine precision, and six orders *tighter* than in
+the free-space conflict scenario. Contact does not disturb the hierarchy; a heavily active
+constraint set does.
+
+**Caveat.** The arm is consistently ~20 % over-stiff. We narrowed the cause (not friction) but did
+not isolate it — most plausibly the damping term plus a contact normal off the task axis.
+
+![Blocked deflection against the contact force it produces](docs/media/blocked_circle_force.png)
+
+The sweep table above shows the relationship holds across a range of commanded stiffnesses; this
+shows it holding *moment to moment*. As the circular path presses the tool into the obstacle the
+deflection grows, and the force grows with it; as the path curves away, both fall together. That
+covariation is the spring law of `f = KΔx` observed directly rather than inferred from endpoints,
+and it is what "the arm renders a commanded impedance" actually means.
+
+There is no plot of the stiffness sweep itself: three points against an identity line adds nothing
+the table does not already say. The interaction is worth seeing, though:
+
+<p align="center">
+  <img src="docs/media/blocked_circle.gif" width="480" alt="Arm deflecting off an unmodelled obstacle">
+</p>
+
+The red block is the obstacle, and the controller has no knowledge of it — no avoidance term, no
+collision model, nothing in the task stack refers to it. **Watch the tool tip run into it and stop
+short**, holding against it rather than either forcing through or being knocked off the surface. The
+force it holds with is what the table above measures. Reproduce with:
+
+```bash
+uv run python main.py --exp blocked_circle --record docs/media/blocked_circle.gif --time 10
+```
+
+### 5 · `benchmark` — real-time cost
+
+```bash
+uv run python main.py --no-vis --exp benchmark
+```
+
+The two-level cascade solves in **415 µs** mean and **1.34 ms** worst case against a 5 ms control
+period. Read this as a cost rather than a headline: it is **4.4×** the 95 µs needed to evaluate the
+classical dynamically consistent pseudo-inverse on the same problem. That is the price of solving
+instead of inverting, and it is affordable here — but it is a price.
+
+---
+
+## Additional investigation: behaviour near a singularity
+
+Not part of the report's argument, and not a reproduction of anything in the paper — §2.2's *Note*
+invites extra investigations, and this is one. It is included because the result is worth having and
+because what it *fails* to show is instructive.
+
+```bash
+uv run python main.py --exp singularity
+```
+
+The arm is commanded to a target far enough along +x that it must fully extend to chase it, which
+drives the position Jacobian toward rank deficiency.
+
+![Jacobian conditioning against torque utilisation near a singularity](docs/media/singularity.png)
+
+Every time `σ_min` collapses — the shaded bands — the torque utilisation spikes to exactly **1.0**
+and stops there. The QP reaches `σ_min = 5.1·10⁻⁴`, a badly conditioned Jacobian, and still commands
+nothing outside the actuator limits: **0 violations**. That is the useful claim, and it is about the
+QP's own robustness.
+
+### What this does *not* show, and why
+
+The paper attributes the jitter in its Figs. 1–3 to classical laws inverting **J** near
+singularities without damping. **We could not reproduce that**, and the figure deliberately shows a
+single controller rather than implying otherwise. Driving all four at the same target:
+
+| Controller | σ_min reached | max \|τ\| | Over limit |
+| :--- | ---: | ---: | ---: |
+| Classical transpose, eq. (9) | 0.179 | 91.77 | **70.92 N·m** |
+| Null-space, eq. (10) | 0.00037 | 87.00 | 0.00 |
+| Weighted-sum QP | 0.219 | 87.00 | 0.00 |
+| **Hierarchical QP, eq. (18)** | **0.00026** | 87.00 | **0.00** |
+
+Two reasons the expected failure never appears. The transpose law computes `τ = Jᵀf` and **inverts
+nothing**, so it has no singularity to blow up at — and it never gets near one anyway. The method
+that *does* invert is the null-space projection, and our implementation both damps the pseudo-inverse
+and clips its output, which is exactly what suppresses the effect. Demonstrating the paper's claim
+would need an undamped, unclipped variant that does not exist in this codebase.
+
+The transpose law does exceed its bound by 70.9 N·m — but that is a constraint-handling failure, not
+a singularity one, and it is already shown properly in the comparison above.
+
+---
+
 ## Evaluation Benchmark Suite (Task 2.2 & ICRA 2018 Reproduction)
 
 The repository provides a complete benchmark suite covering 10 validation experiments and real-time solver latency profiling:
