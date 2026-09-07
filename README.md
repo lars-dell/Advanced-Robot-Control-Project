@@ -9,6 +9,9 @@ Reproduction and evaluation of the hierarchical, QP-based Cartesian impedance co
 on a 7-DOF Franka Emika Panda in the [Genesis](https://github.com/Genesis-Embodied-AI/Genesis)
 simulator.
 
+**Jeffrey Kenny** (jeffrey.kenny@tum.de) · **Lars Dellmann** (lars.dellmann@tum.de)  
+Advanced Robot Control and Learning, Technical University of Munich, Summer Semester 2026
+
 ---
 
 ## What this shows
