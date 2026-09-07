@@ -23,18 +23,20 @@ import logging
 import os
 import pathlib
 import sys
-from typing import Dict, List, Optional, Tuple, Sequence, Union
-import numpy as np
+from typing import Dict, List, Optional, Sequence, Union
+
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # Ensure root workspace directory is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from controllers import BaseController, make_controller
 from envs.genesis_sim import GenesisSim
-from controllers import make_controller, BaseController
-from tasks import TaskStack, CartesianPoseTask, JointPostureTask
+from tasks import CartesianPoseTask, JointPostureTask, TaskStack
 
 logger = logging.getLogger("ExpConflict")
 
@@ -228,12 +230,13 @@ def run_conflict(
         logger.info(f"Logs written to {out}")
 
     if save_plot:
-        plot_conflict(logs, target_pos, output_path=f"exp_conflict_{order_str}.png")
+        plot_conflict(logs, target_pos,
+                      output_path=f"results/figures/exp_conflict_{order_str}.png")
 
     return logs
 
 
-def plot_conflict(logs: Dict[str, np.ndarray], target_pos: np.ndarray, output_path: str = "exp_conflict.png") -> None:
+def plot_conflict(logs: Dict[str, np.ndarray], target_pos: np.ndarray, output_path: str = "results/figures/exp_conflict.png") -> None:
     """Generates per-scenario diagnostic plots for the conflicting task hierarchy."""
     t = logs["time"]
     p_act = logs["ee_pos"]
@@ -290,6 +293,7 @@ def plot_conflict(logs: Dict[str, np.ndarray], target_pos: np.ndarray, output_pa
     ax3d.legend()
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.savefig(output_path, dpi=150)
     plt.close()
     logger.info(f"Saved diagnostic plot to {output_path}")

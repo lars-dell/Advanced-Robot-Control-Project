@@ -15,16 +15,17 @@ import logging
 import os
 import sys
 import time
-from typing import Dict, List, Tuple, Any
-import numpy as np
+from typing import Any, Dict, List
+
 import matplotlib.pyplot as plt
+import numpy as np
 
 # Ensure root workspace directory is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from envs.genesis_sim import GenesisSim
 from controllers.qp_impedance import QPImpedanceController
-from tasks import TaskStack, CartesianPoseTask, JointPostureTask, CircularTrajectoryGenerator
+from envs.genesis_sim import GenesisSim
+from tasks import CartesianPoseTask, CircularTrajectoryGenerator, JointPostureTask, TaskStack
 from utils.math_utils import dynamically_consistent_pinv
 
 logger = logging.getLogger("BenchmarkLatency")
@@ -214,7 +215,7 @@ def run_latency_benchmark(
 
 def plot_benchmark_latency(
     data: Dict[str, Any],
-    output_path: str = "benchmark_solver_latency.png"
+    output_path: str = "results/figures/benchmark_solver_latency.png"
 ) -> None:
     """
     Generates diagnostic histograms and latency distribution plots.
@@ -290,6 +291,7 @@ def plot_benchmark_latency(
     ax4.legend()
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.savefig(output_path, dpi=200)
     logger.info(f"Saved benchmark latency plot to {output_path}")
     plt.close()

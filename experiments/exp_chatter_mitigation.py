@@ -8,26 +8,27 @@ to demonstrate the elimination of boundary active-set limit cycles:
     3. Torque Rate Penalty Only (w_dtau = 0.05 on ||tau_k - tau_{k-1}||^2)
     4. Combined (Soft Constraints rho = 2000.0 + Torque Rate Penalty w_dtau = 0.05)
 
-Generates a dedicated 4-panel publication-grade comparative plot 'exp_chatter_mitigation.png'.
+Generates a dedicated 4-panel publication-grade comparative plot 'results/figures/exp_chatter_mitigation.png'.
 """
 
 import argparse
 import logging
 import os
 import sys
-import time
-from typing import Dict, List, Tuple, Any
-import numpy as np
+from typing import Any, Dict
+
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # Ensure root workspace directory is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from envs.genesis_sim import GenesisSim
 from controllers.qp_impedance import QPImpedanceController
-from tasks import TaskStack, CartesianPoseTask, JointPostureTask
+from envs.genesis_sim import GenesisSim
+from tasks import CartesianPoseTask, JointPostureTask, TaskStack
 
 logger = logging.getLogger("ExpChatterMitigation")
 
@@ -156,7 +157,7 @@ def run_chatter_mitigation_benchmark(
     sim_time: float = 5.0,
     dt: float = 0.005,
     device: str = "cpu",
-    output_path: str = "exp_chatter_mitigation.png"
+    output_path: str = "results/figures/exp_chatter_mitigation.png"
 ) -> Dict[str, Any]:
     """
     Executes the 4-case comparison study and produces the comparative visualization.
@@ -232,7 +233,7 @@ def print_chatter_summary_table(results: Dict[str, Dict[str, Any]]) -> None:
 
 def plot_chatter_mitigation(
     results: Dict[str, Dict[str, Any]],
-    output_path: str = "exp_chatter_mitigation.png"
+    output_path: str = "results/figures/exp_chatter_mitigation.png"
 ) -> None:
     """
     Generates a 4-panel high-resolution publication-grade figure.
@@ -305,6 +306,7 @@ def plot_chatter_mitigation(
         ax4.text(bar.get_x() + bar.get_width() / 2.0, h + 200, f"{h:.0f} N·m/s", ha="center", va="bottom", fontsize=9, fontweight="bold")
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.savefig(output_path, dpi=200)
     logger.info(f"Saved active-set chatter mitigation figure to {output_path}")
     plt.close()
@@ -316,7 +318,7 @@ def main():
     parser.add_argument("--time", type=float, default=5.0, help="Simulation duration per trial in seconds")
     parser.add_argument("--dt", type=float, default=0.005, help="Simulation timestep in seconds")
     parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "gpu"], help="Computing backend")
-    parser.add_argument("--out", type=str, default="exp_chatter_mitigation.png", help="Output figure filename")
+    parser.add_argument("--out", type=str, default="results/figures/exp_chatter_mitigation.png", help="Output figure filename")
     args = parser.parse_args()
 
     run_chatter_mitigation_benchmark(

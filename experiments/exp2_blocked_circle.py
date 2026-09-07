@@ -14,18 +14,18 @@ import logging
 import os
 import pathlib
 import sys
-import time
-from typing import Dict, List, Optional, Tuple
-import numpy as np
+from typing import Dict, List, Optional
+
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.patches import Rectangle
 
 # Ensure root workspace directory is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from envs.genesis_sim import GenesisSim
 from controllers.qp_impedance import QPImpedanceController
-from tasks import TaskStack, CartesianPoseTask, JointPostureTask, CartesianForceTask, CircularTrajectoryGenerator
+from envs.genesis_sim import GenesisSim
+from tasks import CartesianForceTask, CartesianPoseTask, CircularTrajectoryGenerator, JointPostureTask, TaskStack
 
 logger = logging.getLogger("Exp2_BlockedCircle")
 
@@ -275,7 +275,7 @@ def plot_experiment_2(
     obstacle_box_cfg: Dict,
     center: np.ndarray,
     radius: float,
-    output_path: str = "exp2_blocked_circle.png"
+    output_path: str = "results/figures/exp2_blocked_circle.png"
 ) -> None:
     """
     Generates and saves detailed multi-panel diagnostic plots for Experiment 2 including Task Errors.
@@ -376,6 +376,7 @@ def plot_experiment_2(
     ax6.grid(True)
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.savefig(output_path, dpi=200)
     logger.info(f"[Exp 2] Saved diagnostic plot to {output_path}")
     plt.close()

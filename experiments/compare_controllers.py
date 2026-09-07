@@ -17,23 +17,23 @@ Controllers evaluated:
 import argparse
 import logging
 import os
-import pathlib
 import sys
-import time
-from typing import Dict, List, Optional, Tuple, Sequence, Any
-import numpy as np
+from typing import Any, Dict, Optional, Sequence
+
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # Ensure root workspace directory is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from controllers import make_controller, list_controllers, BaseController, CANONICAL_CONTROLLERS
+from controllers import CANONICAL_CONTROLLERS
+from experiments.exp11_cartesian_corridor_circle import run_experiment_11
 from experiments.exp_conflict import run_conflict
 from experiments.exp_reach import run_reach
 from experiments.exp_reach_split import run_reach_split
-from experiments.exp11_cartesian_corridor_circle import run_experiment_11
 
 logger = logging.getLogger("CompareControllers")
 
@@ -338,6 +338,7 @@ def plot_comparison(
         )
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.savefig(output_path, dpi=200)
     logger.info(f"Saved publication comparison figure to {output_path}")
     print(f"Saved publication comparison figure to: {output_path}")
@@ -383,7 +384,7 @@ def run_controller_comparison(
     duration = sim_time if sim_time is not None else default_times.get(scenario, 5.0)
 
     logger.info("================================================================================")
-    logger.info(f"  STARTING MULTI-CONTROLLER BENCHMARK COMPARISON")
+    logger.info("  STARTING MULTI-CONTROLLER BENCHMARK COMPARISON")
     logger.info(f"  Scenario: {scenario.upper()} | Duration: {duration:.1f}s | Device: {device}")
     logger.info(f"  Controllers to evaluate: {', '.join(target_controllers)}")
     logger.info("================================================================================")

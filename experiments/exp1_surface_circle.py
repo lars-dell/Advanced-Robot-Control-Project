@@ -2,26 +2,29 @@
 Experiment 1: Circular Surface Trajectory Tracking with Contact Force Exertion.
 
 Demonstrates Multi-Priority QP Impedance Control:
-  - Priority 0 (Primary): Exert downward contact force (F_z = -10 N) onto top surface of a box.
-  - Priority 1 (Secondary): Follow a circular trajectory (R = 0.08m, T = 4.0s) in XY plane along the surface.
+  - Priority 0 (Primary): Follow a circular trajectory (R = 0.06 m, T = 4.0 s) in the XY plane.
+  - Priority 1 (Secondary): Exert a downward contact force (F_z = -10 N) onto the top of the box.
   - Priority 2 (Tertiary): Maintain nullspace joint posture.
+
+NOTE: the ordering above is the one the code actually builds (see the task stack below). An
+earlier version of this docstring had priorities 0 and 1 the other way round.
 """
 
 import argparse
 import logging
 import os
 import sys
-import time
-from typing import Dict, List, Tuple
-import numpy as np
+from typing import Dict, List
+
 import matplotlib.pyplot as plt
+import numpy as np
 
 # Ensure root workspace directory is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from envs.genesis_sim import GenesisSim
 from controllers.qp_impedance import QPImpedanceController
-from tasks import TaskStack, CartesianPoseTask, JointPostureTask, CartesianForceTask, CircularTrajectoryGenerator
+from envs.genesis_sim import GenesisSim
+from tasks import CartesianForceTask, CartesianPoseTask, CircularTrajectoryGenerator, JointPostureTask, TaskStack
 
 logger = logging.getLogger("Exp1_SurfaceCircle")
 
@@ -220,7 +223,7 @@ def plot_experiment_1(
     box_cfg: Dict,
     center: np.ndarray,
     radius: float,
-    output_path: str = "exp1_surface_circle.png"
+    output_path: str = "results/figures/exp1_surface_circle.png"
 ) -> None:
     """
     Generates and saves detailed multi-panel diagnostic plots for Experiment 1 including Task Errors.
@@ -305,6 +308,7 @@ def plot_experiment_1(
     ax6.grid(True)
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.savefig(output_path, dpi=200)
     logger.info(f"[Exp 1] Saved diagnostic plot to {output_path}")
     plt.close()

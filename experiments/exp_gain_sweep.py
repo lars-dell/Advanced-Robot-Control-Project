@@ -7,34 +7,29 @@ Evaluates the impact of:
     3. Cross-Controller Robustness across Gains (Hierarchical QP vs Weighted QP vs Saturated Algebraic vs Classical Transpose).
     4. Actuator Torque Limit Strictness (100%, 50%, 25% of nominal torque bounds).
 
-Outputs high-resolution comparative diagnostic plots to 'exp_gain_sweep.png' and logs metrics.
+Outputs high-resolution comparative diagnostic plots to 'results/figures/exp_gain_sweep.png' and logs metrics.
 """
 
 import argparse
 import logging
 import os
-import pathlib
 import sys
-import time
-from typing import Dict, List, Tuple, Any
-import numpy as np
+from typing import Any, Dict, List, Tuple
+
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # Ensure root workspace directory is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from envs.genesis_sim import GenesisSim
 from controllers import (
-    BaseController,
-    QPImpedanceController,
-    ClassicalTransposeController,
-    SaturatedAlgebraicController,
-    WeightedQPController,
     make_controller,
 )
-from tasks import TaskStack, CartesianPoseTask, JointPostureTask
+from envs.genesis_sim import GenesisSim
+from tasks import CartesianPoseTask, JointPostureTask, TaskStack
 
 logger = logging.getLogger("ExpGainSweep")
 
@@ -164,7 +159,7 @@ def run_parameter_sensitivity_study(
     sim_time: float = 3.5,
     dt: float = 0.005,
     device: str = "cpu",
-    output_path: str = "exp_gain_sweep.png"
+    output_path: str = "results/figures/exp_gain_sweep.png"
 ) -> Dict[str, Any]:
     """
     Orchestrates the 4 systematic parameter variation benchmarks.
@@ -262,7 +257,7 @@ def plot_gain_sensitivity(
     damping_results: Dict[str, Dict[str, Any]],
     cross_results: Dict[str, Dict[str, Any]],
     torque_results: Dict[str, Dict[str, Any]],
-    output_path: str = "exp_gain_sweep.png"
+    output_path: str = "results/figures/exp_gain_sweep.png"
 ) -> None:
     """
     Renders a 4-panel publication-grade figure summarizing the parameter sensitivity analysis.
@@ -325,6 +320,7 @@ def plot_gain_sensitivity(
     ax4.legend(loc="upper right", fontsize=9)
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.savefig(output_path, dpi=200)
     logger.info(f"Saved publication-grade parameter sensitivity plot to {output_path}")
     plt.close()
@@ -336,7 +332,7 @@ def main():
     parser.add_argument("--sim-time", type=float, default=3.5, help="Simulation duration per trial in seconds")
     parser.add_argument("--dt", type=float, default=0.005, help="Simulation timestep in seconds")
     parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "gpu"], help="Computing backend")
-    parser.add_argument("--out", type=str, default="exp_gain_sweep.png", help="Output figure filename")
+    parser.add_argument("--out", type=str, default="results/figures/exp_gain_sweep.png", help="Output figure filename")
     args = parser.parse_args()
 
     run_parameter_sensitivity_study(

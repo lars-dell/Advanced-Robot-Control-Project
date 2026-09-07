@@ -16,19 +16,20 @@ import logging
 import os
 import pathlib
 import sys
-from typing import Dict, List, Optional
-import numpy as np
-from typing import Dict, List, Optional, Tuple, Any, Union
+from typing import Dict, List, Optional, Union
+
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # Ensure root workspace directory is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from controllers import BaseController, make_controller
 from envs.genesis_sim import GenesisSim
-from controllers import make_controller, BaseController
-from tasks import TaskStack, CartesianPoseTask, JointPostureTask
+from tasks import CartesianPoseTask, JointPostureTask, TaskStack
 
 logger = logging.getLogger("ExpReachSplit")
 
@@ -191,7 +192,7 @@ def run_reach_split(
     return logs
 
 
-def plot_reach_split(logs: Dict[str, np.ndarray], target_pos: np.ndarray, output_path: str = "exp_reach_split.png") -> None:
+def plot_reach_split(logs: Dict[str, np.ndarray], target_pos: np.ndarray, output_path: str = "results/figures/exp_reach_split.png") -> None:
     """Generates a multi-panel diagnostic plot for the decomposed reach_split scenario."""
     t = logs["time"]
     p_act = logs["ee_pos"]
@@ -238,6 +239,7 @@ def plot_reach_split(logs: Dict[str, np.ndarray], target_pos: np.ndarray, output
         axs[1, 1].legend()
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.savefig(output_path, dpi=150)
     plt.close()
     logger.info(f"Saved diagnostic plot to {output_path}")

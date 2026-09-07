@@ -1,7 +1,15 @@
 """
-Experiment 5: Torque-Constrained Surface Wiping with Active Inequality Constraints.
+Experiment 5: Surface Wiping under Tightened Joint Torque Bounds.
 
-Demonstrates Multi-Priority QP Impedance Control under tight joint torque saturation bounds (±20 Nm):
+Demonstrates Multi-Priority QP Impedance Control under tightened joint torque bounds
+(+/-20 Nm on joints 1-4):
+
+WARNING: the tightened bounds do NOT actually engage. Measured max|tau| over this run is
+15.3 Nm against the 20 Nm limit, so no inequality constraint becomes active and this
+experiment does not demonstrate what its original title claimed. See
+docs/EVALUATION_FRAMEWORK.md section 2.4. Use the `conflict` scenario for an active
+constraint set (>=1 joint on a bound in 92.5% of steps).
+
   - Priority 0 (Primary): Exert downward contact force (F_z = -15 N) onto table surface.
   - Priority 1 (Secondary): Follow a smooth S-curve wiping trajectory in XY plane.
   - Priority 2 (Tertiary): Maintain joint space posture.
@@ -11,17 +19,17 @@ import argparse
 import logging
 import os
 import sys
-import time
 from typing import Dict, List, Tuple
-import numpy as np
+
 import matplotlib.pyplot as plt
+import numpy as np
 
 # Ensure root workspace directory is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from envs.genesis_sim import GenesisSim
 from controllers.qp_impedance import QPImpedanceController
-from tasks import TaskStack, CartesianPoseTask, JointPostureTask, CartesianForceTask
+from envs.genesis_sim import GenesisSim
+from tasks import CartesianForceTask, CartesianPoseTask, JointPostureTask, TaskStack
 
 logger = logging.getLogger("Exp5_TorqueWipe")
 
@@ -208,7 +216,7 @@ def run_experiment_5(
     return logs
 
 
-def plot_experiment_5(logs: Dict[str, np.ndarray], wipe_center: np.ndarray, output_path: str = "exp5_torque_constrained_wipe.png") -> None:
+def plot_experiment_5(logs: Dict[str, np.ndarray], wipe_center: np.ndarray, output_path: str = "results/figures/exp5_torque_constrained_wipe.png") -> None:
     """
     Generates and saves detailed multi-panel diagnostic plots for Experiment 5.
     """
@@ -290,6 +298,7 @@ def plot_experiment_5(logs: Dict[str, np.ndarray], wipe_center: np.ndarray, outp
     ax6.legend()
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.savefig(output_path, dpi=200)
     logger.info(f"[Exp 5] Saved diagnostic plot to {output_path}")
     plt.close()

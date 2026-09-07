@@ -10,14 +10,13 @@ Provides command-line dispatching via --experiment / --exp for:
 
 import argparse
 import logging
-import sys
 import subprocess
-from typing import Optional
+import sys
 
 from experiments import (
-    run_reach,
-    run_reach_split,
+    run_chatter_mitigation_benchmark,
     run_conflict,
+    run_controller_comparison,
     run_experiment_1,
     run_experiment_2,
     run_experiment_3,
@@ -30,9 +29,9 @@ from experiments import (
     run_experiment_10,
     run_experiment_11,
     run_latency_benchmark,
-    run_controller_comparison,
     run_parameter_sensitivity_study,
-    run_chatter_mitigation_benchmark,
+    run_reach,
+    run_reach_split,
 )
 
 logger = logging.getLogger(__name__)
@@ -191,7 +190,7 @@ def main() -> None:
         run_experiment_1(sim_time=args.time or 8.0, dt=args.dt, show_viewer=show_viewer, device=args.device)
     elif exp == "blocked_circle":
         run_experiment_2(sim_time=args.time or 8.0, dt=args.dt, show_viewer=show_viewer,
-                         device=args.device, record_path=args.record)
+                         device=args.device, record_path=args.record, out_path=args.out)
     elif exp == "apf_avoidance":
         run_experiment_3(sim_time=args.time or 6.0, dt=args.dt, show_viewer=show_viewer, device=args.device)
     elif exp == "multilink_push":
@@ -199,7 +198,8 @@ def main() -> None:
     elif exp == "torque_wipe":
         run_experiment_5(sim_time=args.time or 8.0, dt=args.dt, show_viewer=show_viewer, device=args.device)
     elif exp == "singularity":
-        run_experiment_6(sim_time=args.time or 6.0, dt=args.dt, show_viewer=show_viewer, device=args.device)
+        run_experiment_6(sim_time=args.time or 6.0, dt=args.dt, show_viewer=show_viewer,
+                         device=args.device, out_path=args.out)
     elif exp == "baseline_comparison":
         sim_time = args.time if args.time is not None else 5.0
         run_experiment_7(sim_time=sim_time, dt=args.dt, device=args.device)
@@ -229,7 +229,7 @@ def main() -> None:
             controller=args.controller,
         )
     elif exp == "gain_sweep":
-        out_fig = args.out or "exp_gain_sweep.png"
+        out_fig = args.out or "results/figures/exp_gain_sweep.png"
         run_parameter_sensitivity_study(
             sim_time=args.time or 3.5,
             dt=args.dt,
@@ -237,7 +237,7 @@ def main() -> None:
             output_path=out_fig
         )
     elif exp in ("chatter_mitigation", "chatter"):
-        out_fig = args.out or "exp_chatter_mitigation.png"
+        out_fig = args.out or "results/figures/exp_chatter_mitigation.png"
         run_chatter_mitigation_benchmark(
             sim_time=args.time or 5.0,
             dt=args.dt,

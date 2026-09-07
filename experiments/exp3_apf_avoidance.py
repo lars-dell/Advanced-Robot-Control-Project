@@ -11,18 +11,18 @@ import argparse
 import logging
 import os
 import sys
-import time
-from typing import Dict, List, Tuple
-import numpy as np
+from typing import Dict, List
+
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.patches import Circle
 
 # Ensure root workspace directory is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from envs.genesis_sim import GenesisSim
 from controllers.qp_impedance import QPImpedanceController
-from tasks import TaskStack, CartesianPoseTask, JointPostureTask, APFRepulsiveTask
+from envs.genesis_sim import GenesisSim
+from tasks import APFRepulsiveTask, CartesianPoseTask, JointPostureTask, TaskStack
 
 logger = logging.getLogger("Exp3_APFAvoidance")
 
@@ -184,7 +184,7 @@ def run_experiment_3(
     return logs
 
 
-def plot_experiment_3(logs: Dict[str, np.ndarray], output_path: str = "exp3_apf_avoidance.png") -> None:
+def plot_experiment_3(logs: Dict[str, np.ndarray], output_path: str = "results/figures/exp3_apf_avoidance.png") -> None:
     """
     Generates and saves detailed multi-panel diagnostic plots for Experiment 3.
     """
@@ -275,6 +275,7 @@ def plot_experiment_3(logs: Dict[str, np.ndarray], output_path: str = "exp3_apf_
     ax6.grid(True)
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.savefig(output_path, dpi=200)
     logger.info(f"[Exp 3] Saved diagnostic plot to {output_path}")
     plt.close()

@@ -25,20 +25,20 @@ import logging
 import os
 import pathlib
 import sys
-import time
-from typing import Dict, List, Tuple, Any, Optional, Union
-import numpy as np
+from typing import Dict, List, Optional, Tuple, Union
+
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # Ensure root workspace directory is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from controllers import BaseController, make_controller
 from envs.genesis_sim import GenesisSim
-from controllers import make_controller, BaseController
-from tasks import TaskStack, CartesianPoseTask, JointPostureTask, ZBoundaryTask
-
+from tasks import CartesianPoseTask, JointPostureTask, TaskStack, ZBoundaryTask
 
 logger = logging.getLogger("Exp11_CorridorCircle")
 
@@ -357,7 +357,7 @@ def run_experiment_11(
         logger.info(f"Logs written to {out}")
 
     if save_plot:
-        plot_experiment_11(logs, output_path="exp11_cartesian_corridor_circle.png")
+        plot_experiment_11(logs, output_path="results/figures/exp11_cartesian_corridor_circle.png")
 
     logger.info("================================================================================")
     logger.info(f"Exp 11 Finished | Max Ceiling Violation: {np.max(logs['ceiling_err'])*1000:.2f} mm | "
@@ -370,7 +370,7 @@ def run_experiment_11(
 
 def plot_experiment_11(
     logs: Dict[str, np.ndarray],
-    output_path: str = "exp11_cartesian_corridor_circle.png"
+    output_path: str = "results/figures/exp11_cartesian_corridor_circle.png"
 ) -> None:
     """
     Generates a 6-panel comprehensive diagnostic plot for Experiment 11.
@@ -466,6 +466,7 @@ def plot_experiment_11(
     ax6.legend(loc="upper right", fontsize=8)
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.savefig(output_path, dpi=200)
     logger.info(f"[Exp 11] Diagnostic plot saved to {output_path}")
     plt.close()

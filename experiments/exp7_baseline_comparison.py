@@ -16,23 +16,23 @@ import argparse
 import logging
 import os
 import sys
-import time
-from typing import Dict, List, Tuple, Any
-import numpy as np
+from typing import Any, Dict, List, Tuple
+
 import matplotlib.pyplot as plt
+import numpy as np
 
 # Ensure root workspace directory is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from envs.genesis_sim import GenesisSim
 from controllers import (
     BaseController,
-    QPImpedanceController,
     ClassicalTransposeController,
+    QPImpedanceController,
     SaturatedAlgebraicController,
     WeightedQPController,
 )
-from tasks import TaskStack, CartesianPoseTask, JointPostureTask
+from envs.genesis_sim import GenesisSim
+from tasks import CartesianPoseTask, JointPostureTask, TaskStack
 
 logger = logging.getLogger("Exp7_BaselineComparison")
 
@@ -254,7 +254,7 @@ def run_experiment_7(
 
 def plot_experiment_7(
     results: Dict[str, Dict[str, np.ndarray]],
-    output_path: str = "exp7_baseline_comparison.png"
+    output_path: str = "results/figures/exp7_baseline_comparison.png"
 ) -> None:
     """
     Generates a 4-panel figure directly reproducing Figures 1-4 of Hoffman et al. ICRA 2018.
@@ -280,7 +280,7 @@ def plot_experiment_7(
         p_des = res["p_des"]
 
         # Reference workspace reach limit of Franka Emika Panda
-        ax.axhline(0.855, color="gray", linestyle=":", linewidth=1.2, label="Max Reach Boundary (~0.855m)")
+        ax.axhline(1.267, color="gray", linestyle=":", linewidth=1.2, label="Measured reachable radius (1.267 m)")
 
         # Plot X, Y, Z actual vs desired
         ax.plot(t, p_des[:, 0], "r--", alpha=0.7, label="x_des (unreachable 0.95m)")
@@ -299,6 +299,7 @@ def plot_experiment_7(
         ax.legend(loc="upper right", fontsize=8)
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.savefig(output_path, dpi=200)
     logger.info(f"Saved 4-way baseline comparative plot to {output_path}")
     plt.close()

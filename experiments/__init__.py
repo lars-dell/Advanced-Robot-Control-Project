@@ -3,9 +3,8 @@ Experiments package for Multi-Priority Cartesian Impedance Control validation su
 """
 
 # Base priority hierarchy scenarios
-from experiments.exp_reach import run_reach
-from experiments.exp_reach_split import run_reach_split
-from experiments.exp_conflict import run_conflict
+from experiments.benchmark_solver_latency import run_latency_benchmark
+from experiments.compare_controllers import run_controller_comparison
 
 # Benchmark suite experiments (Task 2.2 & ICRA 2018 Reproduction)
 from experiments.exp1_surface_circle import run_experiment_1
@@ -18,11 +17,13 @@ from experiments.exp7_baseline_comparison import run_experiment_7
 from experiments.exp8_frequency_bode_analysis import run_experiment_8
 from experiments.exp9_passivity_energy_profiling import run_experiment_9
 from experiments.exp10_parameter_robustness import run_experiment_10
-from experiments.exp11_cartesian_corridor_circle import run_experiment_11, run_experiment_11 as run_corridor
-from experiments.benchmark_solver_latency import run_latency_benchmark
-from experiments.compare_controllers import run_controller_comparison
-from experiments.exp_gain_sweep import run_parameter_sensitivity_study
+from experiments.exp11_cartesian_corridor_circle import run_experiment_11
+from experiments.exp11_cartesian_corridor_circle import run_experiment_11 as run_corridor
 from experiments.exp_chatter_mitigation import run_chatter_mitigation_benchmark
+from experiments.exp_conflict import run_conflict
+from experiments.exp_gain_sweep import run_parameter_sensitivity_study
+from experiments.exp_reach import run_reach
+from experiments.exp_reach_split import run_reach_split
 
 __all__ = [
     "run_reach",

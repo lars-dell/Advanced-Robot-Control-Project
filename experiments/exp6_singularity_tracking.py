@@ -2,7 +2,9 @@
 Experiment 6: Kinematic Singularity & Workspace Boundary Tracking.
 
 Demonstrates controller stability and joint torque boundedness when tracking target setpoints
-near or beyond the manipulator's workspace boundary (R >= 0.85 m for Franka Panda).
+near or beyond the manipulator's reachable set. The tool-tip reachable radius was MEASURED at
+>= 1.267 m for this model (scripts/probe_genesis.py); the 0.855 m figure quoted in earlier
+versions is the datasheet horizontal flange reach and does not apply here.
 """
 
 import argparse
@@ -10,18 +12,17 @@ import logging
 import os
 import pathlib
 import sys
-import time
-from typing import Dict, List, Optional, Tuple
-import numpy as np
+from typing import Dict, List, Optional
+
 import matplotlib.pyplot as plt
+import numpy as np
 
 # Ensure root workspace directory is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from envs.genesis_sim import GenesisSim
-from controllers.qp_impedance import QPImpedanceController
 from controllers import make_controller
-from tasks import TaskStack, CartesianPoseTask, JointPostureTask
+from envs.genesis_sim import GenesisSim
+from tasks import CartesianPoseTask, JointPostureTask, TaskStack
 
 logger = logging.getLogger("Exp6_Singularity")
 
@@ -200,7 +201,7 @@ def run_experiment_6(
     return logs
 
 
-def plot_experiment_6(logs: Dict[str, np.ndarray], output_path: str = "exp6_singularity_tracking.png") -> None:
+def plot_experiment_6(logs: Dict[str, np.ndarray], output_path: str = "results/figures/exp6_singularity_tracking.png") -> None:
     """
     Generates and saves detailed multi-panel diagnostic plots for Experiment 6.
     """
@@ -222,7 +223,7 @@ def plot_experiment_6(logs: Dict[str, np.ndarray], output_path: str = "exp6_sing
     ax1.plot(t, p_act[:, 0], "r-", label="Actual X Position [m]")
     ax1.plot(t, p_des[:, 0], "r--", label="Target X Position [m]")
     ax1.plot(t, reach_radius, "k-", linewidth=1.5, label="Reach Radius ||p_ee|| [m]")
-    ax1.axhline(0.855, color="gray", linestyle=":", label="Franka Max Reach Radius (0.855m)")
+    ax1.axhline(1.267, color="gray", linestyle=":", label="Measured reachable radius (1.267 m)")
     ax1.set_xlabel("Time [s]")
     ax1.set_ylabel("Position / Reach Radius [m]")
     ax1.set_title("1. Workspace Reaching & Radius Boundary")
@@ -281,6 +282,7 @@ def plot_experiment_6(logs: Dict[str, np.ndarray], output_path: str = "exp6_sing
     ax6.grid(True)
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.savefig(output_path, dpi=200)
     logger.info(f"[Exp 6] Saved diagnostic plot to {output_path}")
     plt.close()

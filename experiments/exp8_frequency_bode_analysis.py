@@ -13,17 +13,17 @@ import argparse
 import logging
 import os
 import sys
-import time
-from typing import Dict, List, Tuple, Any, Optional
-import numpy as np
+from typing import Any, Dict, List, Optional, Tuple
+
 import matplotlib.pyplot as plt
+import numpy as np
 
 # Ensure root workspace directory is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from envs.genesis_sim import GenesisSim
 from controllers.qp_impedance import QPImpedanceController
-from tasks import TaskStack, CartesianPoseTask, JointPostureTask
+from envs.genesis_sim import GenesisSim
+from tasks import CartesianPoseTask, JointPostureTask, TaskStack
 
 logger = logging.getLogger("Exp8_FrequencyBode")
 
@@ -234,7 +234,7 @@ def run_experiment_8(
 
 def plot_experiment_8(
     data: Dict[str, Any],
-    output_path: str = "exp8_frequency_bode_analysis.png"
+    output_path: str = "results/figures/exp8_frequency_bode_analysis.png"
 ) -> None:
     """
     Generates multi-panel Bode plots and time-domain tracking comparisons.
@@ -307,6 +307,7 @@ def plot_experiment_8(
     ax4.legend()
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.savefig(output_path, dpi=200)
     logger.info(f"Saved frequency response plot to {output_path}")
     plt.close()

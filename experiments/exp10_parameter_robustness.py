@@ -12,17 +12,17 @@ import argparse
 import logging
 import os
 import sys
-import time
-from typing import Dict, List, Tuple, Any
-import numpy as np
+from typing import Any, Dict, List
+
 import matplotlib.pyplot as plt
+import numpy as np
 
 # Ensure root workspace directory is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from envs.genesis_sim import GenesisSim
 from controllers.qp_impedance import QPImpedanceController
-from tasks import TaskStack, CartesianPoseTask, JointPostureTask, CircularTrajectoryGenerator
+from envs.genesis_sim import GenesisSim
+from tasks import CartesianPoseTask, CircularTrajectoryGenerator, JointPostureTask, TaskStack
 
 logger = logging.getLogger("Exp10_ParamRobustness")
 
@@ -204,7 +204,7 @@ def run_experiment_10(
 
 def plot_experiment_10(
     results: Dict[str, Any],
-    output_path: str = "exp10_parameter_robustness.png"
+    output_path: str = "results/figures/exp10_parameter_robustness.png"
 ) -> None:
     """
     Generates multi-panel comparative diagnostic plots across uncertainty conditions.
@@ -272,6 +272,7 @@ def plot_experiment_10(
     ax4.legend(fontsize=8)
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.savefig(output_path, dpi=200)
     logger.info(f"Saved parameter robustness diagnostic plot to {output_path}")
     plt.close()

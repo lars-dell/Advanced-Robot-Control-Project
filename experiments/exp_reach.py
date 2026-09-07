@@ -12,18 +12,20 @@ import logging
 import os
 import pathlib
 import sys
-from typing import Dict, List, Optional, Tuple, Any, Union
-import numpy as np
+from typing import Dict, List, Optional, Union
+
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # Ensure root workspace directory is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from controllers import BaseController, make_controller
 from envs.genesis_sim import GenesisSim
-from controllers import make_controller, BaseController
-from tasks import TaskStack, CartesianPoseTask, JointPostureTask
+from tasks import CartesianPoseTask, JointPostureTask, TaskStack
 
 logger = logging.getLogger("ExpReach")
 
@@ -183,7 +185,7 @@ def run_reach(
     return logs
 
 
-def plot_reach(logs: Dict[str, np.ndarray], target_pos: np.ndarray, output_path: str = "exp_reach.png") -> None:
+def plot_reach(logs: Dict[str, np.ndarray], target_pos: np.ndarray, output_path: str = "results/figures/exp_reach.png") -> None:
     """Generates a 4-panel diagnostic plot for the reaching scenario."""
     t = logs["time"]
     p_act = logs["ee_pos"]
@@ -238,6 +240,7 @@ def plot_reach(logs: Dict[str, np.ndarray], target_pos: np.ndarray, output_path:
     ax3d.legend()
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.savefig(output_path, dpi=150)
     plt.close()
     logger.info(f"Saved diagnostic plot to {output_path}")
