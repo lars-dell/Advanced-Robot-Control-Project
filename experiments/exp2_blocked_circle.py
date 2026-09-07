@@ -39,7 +39,8 @@ def run_experiment_2(
     save_plot: bool = True,
     kp_cart: float = 600.0,
     kd_cart: float = 50.0,
-    out_path: Optional[str] = None
+    out_path: Optional[str] = None,
+    record_path: Optional[str] = None
 ) -> Dict[str, np.ndarray]:
     """
     Executes Experiment 2: Surface Circle Trajectory with Blocking Obstacle Box.
@@ -74,7 +75,13 @@ def run_experiment_2(
         dt=dt,
         device=device,
         surface_box=surface_box_cfg,
-        obstacle_box=obstacle_box_cfg
+        obstacle_box=obstacle_box_cfg,
+        record_path=record_path,
+        # The default camera frames the whole workspace, which leaves this experiment's 5 cm
+        # obstacle and the ~13 cm deflection around it too small to read. Move in close on the
+        # contact region instead.
+        camera_pos=(0.95, -0.70, 0.78),
+        camera_lookat=(0.40, 0.0, 0.43),
     )
 
     logger.info("[Exp 2] Initializing Hierarchical QP Impedance Controller...")
@@ -168,6 +175,8 @@ def run_experiment_2(
     log_force_error: List[float] = []
     log_posture_error: List[float] = []
 
+    sim.start_recording()
+
     for step in range(n_steps):
         t_curr = step * dt
 
@@ -182,6 +191,7 @@ def run_experiment_2(
         # Apply torques & step simulation
         sim.apply_torques(torques)
         sim.step()
+        sim.record_frame()
 
         # Telemetry
         p_curr = state["ee_pos"]
@@ -221,6 +231,10 @@ def run_experiment_2(
     logger.info("[Exp 2] Simulation completed successfully.")
 
     # Package logs
+    sim.stop_recording()
+    if record_path:
+        logger.info(f"Recording written to {record_path}")
+
     logs = {
         "time": np.array(log_time),
         "ee_pos": np.array(log_ee_pos),

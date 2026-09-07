@@ -190,7 +190,8 @@ def main() -> None:
     elif exp == "surface_circle":
         run_experiment_1(sim_time=args.time or 8.0, dt=args.dt, show_viewer=show_viewer, device=args.device)
     elif exp == "blocked_circle":
-        run_experiment_2(sim_time=args.time or 8.0, dt=args.dt, show_viewer=show_viewer, device=args.device)
+        run_experiment_2(sim_time=args.time or 8.0, dt=args.dt, show_viewer=show_viewer,
+                         device=args.device, record_path=args.record)
     elif exp == "apf_avoidance":
         run_experiment_3(sim_time=args.time or 6.0, dt=args.dt, show_viewer=show_viewer, device=args.device)
     elif exp == "multilink_push":

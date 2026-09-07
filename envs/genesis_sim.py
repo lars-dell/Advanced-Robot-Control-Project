@@ -93,6 +93,9 @@ class GenesisSim:
         show_markers: bool = True,
         record_path: Optional[str] = None,
         record_fps: int = 12,
+        camera_pos: Tuple[float, float, float] = (1.6, -1.4, 1.2),
+        camera_lookat: Tuple[float, float, float] = (0.55, 0.1, 0.5),
+        camera_res: Tuple[int, int] = (480, 360),
         boxes: Optional[List[Dict]] = None,
         spheres: Optional[List[Dict]] = None,
         goal_sphere_cfg: Optional[Dict] = None,
@@ -114,6 +117,13 @@ class GenesisSim:
             show_markers: Whether to render debug overlays.
             record_path: Optional video/GIF output path.
             record_fps: Frame rate for video/GIF recording.
+            camera_pos: Recording camera position. The default frames the whole workspace, which
+                suits scenarios whose motion spans it; experiments where the interesting behaviour
+                is confined to a small region (a tool against an obstacle, say) should pass a
+                closer position and look-at or the effect is illegible at this resolution.
+            camera_lookat: Recording camera target point.
+            camera_res: Recording resolution in pixels. Raising it improves legibility at a
+                roughly proportional cost in GIF size.
             boxes: Optional list of box dictionaries [{'pos': [x,y,z], 'size': [dx,dy,dz], 'color': [r,g,b]}].
             spheres: Optional list of sphere dictionaries [{'pos': [x,y,z], 'radius': r, 'color': [r,g,b]}].
             goal_sphere_cfg: Optional configuration dict for target goal marker.
@@ -177,6 +187,9 @@ class GenesisSim:
         # included in the render, not just the live viewer.
         self.record_path = record_path
         self.record_fps = record_fps
+        self.camera_pos = tuple(camera_pos)
+        self.camera_lookat = tuple(camera_lookat)
+        self.camera_res = tuple(camera_res)
         self._camera = None
         self._frames: List[np.ndarray] = []
         self._record_every = max(1, int(round(1.0 / (record_fps * dt)))) if record_path else 0
@@ -342,7 +355,7 @@ class GenesisSim:
         # Recording camera, added before build() like every other entity.
         if self.record_path is not None:
             self._camera = self.scene.add_camera(
-                res=(480, 360), pos=(1.6, -1.4, 1.2), lookat=(0.55, 0.1, 0.5),
+                res=self.camera_res, pos=self.camera_pos, lookat=self.camera_lookat,
                 fov=45, GUI=False, debug=True,
             )
 
