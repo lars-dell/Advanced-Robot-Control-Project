@@ -8,9 +8,10 @@ near or beyond the manipulator's workspace boundary (R >= 0.85 m for Franka Pand
 import argparse
 import logging
 import os
+import pathlib
 import sys
 import time
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -19,6 +20,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from envs.genesis_sim import GenesisSim
 from controllers.qp_impedance import QPImpedanceController
+from controllers import make_controller
 from tasks import TaskStack, CartesianPoseTask, JointPostureTask
 
 logger = logging.getLogger("Exp6_Singularity")
@@ -29,7 +31,10 @@ def run_experiment_6(
     dt: float = 0.005,
     show_viewer: bool = True,
     device: str = "cpu",
-    save_plot: bool = True
+    save_plot: bool = True,
+    target: Optional[np.ndarray] = None,
+    controller_name: str = "hierarchical_qp",
+    out_path: Optional[str] = None
 ) -> Dict[str, np.ndarray]:
     """
     Executes Experiment 6: Workspace Boundary & Kinematic Singularity Tracking.
@@ -53,7 +58,8 @@ def run_experiment_6(
     )
 
     logger.info("[Exp 6] Initializing QP Impedance Controller with Regularization (eps=1e-4)...")
-    controller = QPImpedanceController(
+    controller = make_controller(
+        controller_name,
         n_dofs=7,
         kp_cart=400.0,
         kd_cart=40.0,
@@ -66,8 +72,17 @@ def run_experiment_6(
     state = sim.get_state()
     initial_ee_pos = state["ee_pos"].copy()
 
-    # Target position near max workspace reach radius (~0.85 m forward along X)
-    singularity_target = np.array([0.82, 0.0, 0.40])
+    # Commanded far enough along +x that the arm must fully extend to chase it, which is what
+    # drives the position Jacobian toward rank deficiency.
+    #
+    # The previous target [0.82, 0, 0.40] was justified as being "near max workspace reach
+    # (~0.85 m)". That figure is wrong for this model: 855 mm is the datasheet *horizontal flange*
+    # reach, whereas the relevant quantity is the 3-D radius to the tool tip, measured at >= 1.267 m
+    # (scripts/probe_genesis.py). At 0.91 m radius the old target left the arm comfortably inside
+    # its workspace and sigma_min fell only from 0.284 to 0.204 -- no singularity was approached and
+    # the experiment did not demonstrate what its name claims.
+    singularity_target = (np.asarray(target, dtype=np.float64) if target is not None
+                          else np.array([1.30, 0.0, 0.40]))
 
     # Build 2-Level Task Stack
     task_stack = TaskStack()
@@ -166,7 +181,18 @@ def run_experiment_6(
         "min_singular": np.array(log_min_singular),
         "reach_radius": np.array(log_reach_radius),
         "target_pos": singularity_target,
+        "tau_min": sim.tau_min,
+        "tau_max": sim.tau_max,
+        "n_violations": getattr(controller, "n_violations", -1),
+        "n_solves": getattr(controller, "n_solves", -1),
+        "controller": np.array(str(controller_name)),
     }
+
+    if out_path:
+        out = pathlib.Path(out_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(out, **logs)
+        logger.info(f"Logs written to {out}")
 
     if save_plot:
         plot_experiment_6(logs)
