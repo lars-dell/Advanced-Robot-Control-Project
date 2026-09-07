@@ -4,7 +4,8 @@ Artificial Potential Field (APF) Repulsive Task for Reactive Obstacle Avoidance.
 Computes operational space repulsive forces when an obstacle enters the influence margin.
 """
 
-from typing import Dict, Tuple, Optional
+from typing import Dict, Optional, Tuple
+
 import numpy as np
 
 from tasks.base_task import BaseTask

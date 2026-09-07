@@ -8,7 +8,8 @@ Formulated as strict QP inequality constraints b_l <= A_ineq * tau <= b_u based 
 Hoffman et al. (ICRA 2018) Equation (18).
 """
 
-from typing import Dict, Tuple, Optional, Callable
+from typing import Callable, Dict, Optional, Tuple
+
 import numpy as np
 
 from tasks.base_task import BaseTask

@@ -2,10 +2,11 @@
 Pre-compiled parametric CasADi QP solver wrapper.
 """
 
-from typing import Dict, Any, Optional, Tuple, List
-import numpy as np
-import casadi as ca
 import logging
+from typing import Any, Dict, Optional, Tuple
+
+import casadi as ca
+import numpy as np
 
 logger = logging.getLogger(__name__)
 

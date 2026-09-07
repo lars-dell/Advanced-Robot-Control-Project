@@ -3,7 +3,8 @@ Abstract Base Class defining the unified interface for robot controllers.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Union, List, Optional
+from typing import Any, Dict, List, Optional, Union
+
 import numpy as np
 
 

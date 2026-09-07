@@ -9,9 +9,10 @@ Run:  ./.venv/bin/python scripts/probe_genesis.py 2>/dev/null
 """
 
 import inspect
+
+import genesis as gs
 import numpy as np
 import torch
-import genesis as gs
 
 R = "RESULT"
 
@@ -42,7 +43,11 @@ for field in ("refresh_rate", "max_FPS"):
 
 # ---------------------------------------------------------------- Q0: model assets
 hdr("Q0  panda_cylinder.xml mesh assets")
-import os, pathlib, genesis as _gs
+import os
+import pathlib
+
+import genesis as _gs
+
 GA = pathlib.Path(_gs.__file__).parent / "assets" / "xml" / "franka_emika_panda" / "assets"
 print(f"{R}   repo ./assets exists? {os.path.isdir('assets')}")
 print(f"{R}   genesis bundled meshes: {GA}  (exists: {GA.is_dir()}, files: {len(list(GA.glob('*'))) if GA.is_dir() else 0})")

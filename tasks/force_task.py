@@ -2,7 +2,8 @@
 Operational space force task and trajectory generation utilities.
 """
 
-from typing import Dict, Tuple, Optional, Callable
+from typing import Dict, Optional, Tuple
+
 import numpy as np
 
 from tasks.base_task import BaseTask

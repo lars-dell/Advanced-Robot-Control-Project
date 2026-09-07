@@ -3,7 +3,8 @@ Abstract Base Task definition for modular multi-priority robot control.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Tuple, Any, Optional
+from typing import Dict, Optional, Tuple
+
 import numpy as np
 
 

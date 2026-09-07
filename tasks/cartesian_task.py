@@ -2,7 +2,8 @@
 Cartesian space impedance control task implementation.
 """
 
-from typing import Dict, Tuple, Optional, Callable, Any, Sequence, Union
+from typing import Callable, Dict, Optional, Sequence, Tuple
+
 import numpy as np
 
 from tasks.base_task import BaseTask

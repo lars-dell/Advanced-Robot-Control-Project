@@ -6,16 +6,16 @@ Solves a single QP optimization problem combining all prioritized tasks via soft
     subject to  tau_min - h <= tau <= tau_max - h
 """
 
-from typing import Dict, Any, Optional, Union, List
-import numpy as np
 import logging
+from typing import Any, Dict, List, Optional, Union
+
+import numpy as np
 
 from controllers.base_controller import BaseController
-from tasks.base_task import BaseTask
+from solvers.casadi_qp_solver import CasADiQPSolver
 from tasks.cartesian_task import CartesianPoseTask
 from tasks.posture_task import JointPostureTask
 from tasks.task_stack import TaskStack
-from solvers.casadi_qp_solver import CasADiQPSolver
 
 logger = logging.getLogger(__name__)
 

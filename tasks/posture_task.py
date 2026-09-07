@@ -2,7 +2,8 @@
 Joint space posture control task implementation.
 """
 
-from typing import Dict, Tuple, Optional
+from typing import Dict, Optional, Tuple
+
 import numpy as np
 
 from tasks.base_task import BaseTask

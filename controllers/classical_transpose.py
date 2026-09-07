@@ -6,12 +6,12 @@ Implements the classical transpose control law based on:
     Enrico Mingo Hoffman et al. (IEEE ICRA 2018).
 """
 
-from typing import Dict, Any, Optional, Union, List
-import numpy as np
 import logging
+from typing import Any, Dict, Optional, Union
+
+import numpy as np
 
 from controllers.base_controller import BaseController
-from tasks.base_task import BaseTask
 from tasks.cartesian_task import CartesianPoseTask
 from tasks.posture_task import JointPostureTask
 from tasks.task_stack import TaskStack

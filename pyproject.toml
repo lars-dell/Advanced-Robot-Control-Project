@@ -19,11 +19,30 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest",
-    "black",
-    "flake8",
-]
+# ruff replaces both black and flake8. pytest was listed but there is no test suite.
+dev = ["ruff"]
 
 [tool.setuptools.packages.find]
 where = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+exclude = ["Control_example", ".venv", "build", "dist"]
+
+[tool.ruff.lint]
+# Ruff's own default set (E4, E7, E9, F) plus import sorting.
+#
+# Deliberately NOT the D / ANN / UP set used in other projects: `UP` alone reports 449 typing
+# modernisations here (Dict -> dict, Optional[X] -> X | None), which is churn with no behavioural
+# benefit, and this repository has no test suite to catch a regression from a mass rewrite.
+#
+# Known and accepted at the time of writing: 23 F841 (unused locals, mostly debug leftovers),
+# 6 E741 (ambiguous names), 1 E402 in scripts/make_report_figures.py, which must set sys.path
+# before importing its sibling module.
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# A diagnostic probe: it interleaves imports with the section headers it prints, so that each
+# question is self-contained and can be read or deleted on its own.
+"scripts/probe_genesis.py" = ["E402"]

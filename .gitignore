@@ -44,5 +44,3 @@ logs/
 # simulation telemetry
 results/
 
-# Local AI-assistant config, not project work
-CLAUDE.md

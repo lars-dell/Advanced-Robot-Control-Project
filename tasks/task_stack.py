@@ -2,7 +2,8 @@
 Task Stack manager for prioritized multi-task hierarchy ordering and execution.
 """
 
-from typing import List, Tuple, Dict, Optional
+from typing import Dict, List, Optional, Tuple
+
 import numpy as np
 
 from tasks.base_task import BaseTask

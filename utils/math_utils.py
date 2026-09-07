@@ -5,7 +5,8 @@ Provides numerical tools for dynamically consistent pseudo-inverses, null-space 
 matrices, and Cartesian pose error calculations.
 """
 
-from typing import Tuple, Optional
+from typing import Optional
+
 import numpy as np
 
 

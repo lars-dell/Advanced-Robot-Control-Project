@@ -3,11 +3,11 @@ Controllers package for Multi-Priority Cartesian Impedance Control and baseline 
 """
 
 import inspect
-from typing import List, Optional, Union, Dict, Any
+from typing import Any, Dict, List, Union
 
 from controllers.base_controller import BaseController
-from controllers.qp_impedance import QPImpedanceController
 from controllers.classical_transpose import ClassicalTransposeController
+from controllers.qp_impedance import QPImpedanceController
 from controllers.saturated_algebraic import SaturatedAlgebraicController
 from controllers.weighted_qp import WeightedQPController
 
