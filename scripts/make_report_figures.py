@@ -14,8 +14,9 @@ import pathlib
 import sys
 from typing import Dict
 
-import numpy as np
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -23,7 +24,7 @@ import matplotlib.pyplot as plt
 # frame, conclusion as the title, setup as a subtitle, and steady-state values labelled directly
 # on the traces. Reuse its palette rather than re-deriving one.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from plot_results import INK, INK_MUTED, GRID, _style  # noqa: E402
+from plot_results import GRID, INK, INK_MUTED, _style  # noqa: E402
 
 # IEEE conference single column is 3.5 in; keep type at ~8 pt after placement.
 COL_W = 3.5
@@ -40,10 +41,10 @@ plt.rcParams.update({
 
 # Ordered worst-to-best so the proposed method draws on top.
 CONTROLLERS = [
-    ("classical_transpose", "Transpose, eq. (9)", "#c44e52", "-."),
-    ("saturated_algebraic", "Null-space, eq. (10)", "#8172b2", ":"),
+    ("classical_transpose", "Transpose",          "#c44e52", "-."),
+    ("saturated_algebraic", "Null-space",          "#8172b2", ":"),
     ("weighted_qp",         "Weighted-sum QP",     "#ccb974", "--"),
-    ("hierarchical_qp",     "Proposed, eq. (18)",  "#4c72b0", "-"),
+    ("hierarchical_qp",     "Proposed cascade",    "#4c72b0", "-"),
 ]
 
 AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
@@ -104,9 +105,9 @@ def figure_primary_task(data: Dict[str, np.ndarray], out: pathlib.Path, p0_axis:
         for v, color in (min(finals), max(finals)):
             _label_last(ax, data["hierarchical_qp_time"][-1], v, color, dy=4)
         _headline(fig,
-                  "Tracking barely separates the controllers \u2014 feasibility is what does",
-                  "Highest-priority axis against a reference outside the workspace. All four stall "
-                  "short of it; the difference that matters is in the torque figure, not this one.")
+                      "Tracking barely separates the controllers \u2014 feasibility is what does",
+                      "Highest-priority axis against a reference outside the workspace. All four stall "
+                      "short of it; the difference that matters is in the torque figure, not this one.")
 
     ax.set_xlabel("Time [s]")
     ax.set_ylabel(f"{p0_axis} position [m]")
@@ -137,7 +138,7 @@ def figure_torque_bounds(data: Dict[str, np.ndarray], out: pathlib.Path,
     rolling maximum over `window` steps, which is what makes the envelope legible through the
     chattering.
     """
-    fig, ax = plt.subplots(figsize=(8.4, 3.6) if headline else (COL_W, 2.30))
+    fig, ax = plt.subplots(figsize=(8.4, 3.6) if headline else (COL_W, 2.00))
 
     for key, label, color, style in CONTROLLERS:
         tau = np.abs(data[f"{key}_torques"])
@@ -152,7 +153,8 @@ def figure_torque_bounds(data: Dict[str, np.ndarray], out: pathlib.Path,
         ax.plot(t, env, color=color, ls=style, label=label, lw=2.0, zorder=3)
 
     ax.axhline(1.0, color=INK_MUTED, lw=1.0, ls="--", zorder=1)
-    ax.text(0.99, 1.0, " torque limit", ha="right", va="bottom", fontsize=6.5,
+    ax.text(0.99, 1.0, " torque limit", ha="right", va="bottom",
+            fontsize=9 if headline else 7.2,
             transform=ax.get_yaxis_transform())
     lo, hi = ax.get_ylim()
     if hi > 1.0:
@@ -161,22 +163,24 @@ def figure_torque_bounds(data: Dict[str, np.ndarray], out: pathlib.Path,
 
     if headline:
         _headline(fig,
-                  "Only the QP rides the torque limit without crossing it",
-                  "Worst-joint utilisation max|\u03c4|/\u03c4_max: 1.0 is the bound and the shaded "
-                  "band is infeasible. Bold lines are a rolling maximum of the faint per-step signal.")
+                      "Only the QP rides the torque limit without crossing it",
+                      "Worst-joint utilisation max|\u03c4|/\u03c4_max: 1.0 is the bound and the shaded "
+                      "band is infeasible. Bold lines are a rolling maximum of the faint per-step signal.")
 
     ax.set_xlabel("Time [s]")
     ax.set_ylabel(r"$\max_j |\tau_j| / \tau_{\max,j}$")
     ax.grid(alpha=0.3, lw=0.4)
-    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=2,
-              frameon=False, columnspacing=1.1, handlelength=1.9)
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2,
+              frameon=False, columnspacing=1.0, handlelength=1.7,
+              fontsize=9 if headline else 7.4, handletextpad=0.5)
     fig.tight_layout(rect=(0, 0, 1, 0.86) if headline else None, pad=0.3)
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
     print(f"wrote {out}")
 
 
-def figure_priority_residual(data: Dict[str, np.ndarray], out: pathlib.Path) -> None:
+def figure_priority_residual(data: Dict[str, np.ndarray], out: pathlib.Path,
+                             headline: bool = True) -> None:
     """
     Priority residual over time for the cascade against a weighted-sum QP.
 
@@ -187,7 +191,7 @@ def figure_priority_residual(data: Dict[str, np.ndarray], out: pathlib.Path) -> 
         ("weighted_qp", "single-level weighted-sum QP", "#eb6834"),
         ("hierarchical_qp", "proposed hierarchical cascade, eq. (18)", "#2a78d6"),
     ]
-    fig, ax = plt.subplots(figsize=(8.4, 3.6))
+    fig, ax = plt.subplots(figsize=(8.4, 3.6) if headline else (COL_W, 2.45))
     for key, label, color in series:
         r = np.abs(data[f"{key}_priority_residuals"])
         if r.ndim == 2 and r.shape[1] > 0:
@@ -203,17 +207,19 @@ def figure_priority_residual(data: Dict[str, np.ndarray], out: pathlib.Path) -> 
     ax.set_xlabel("time (s)", color=INK_MUTED, fontsize=9)
     ax.set_ylabel(r"$\max_k\ \|J_k B^{-1}(\tau-\tau_k^*)\|$", color=INK_MUTED, fontsize=9)
     ax.legend(loc="center right", frameon=False, fontsize=9, labelcolor=INK)
-    _headline(fig,
-              "A hierarchy enforces priority exactly; a weighting only approximates it",
-              "Same tasks, same solver, same scenario \u2014 only the formulation differs. "
-              "Logarithmic axis: the two are eleven orders of magnitude apart.")
-    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    if headline:
+        _headline(fig,
+                  "A hierarchy enforces priority exactly; a weighting only approximates it",
+                  "Same tasks, same solver, same scenario \u2014 only the formulation differs. "
+                  "Logarithmic axis: the two are eleven orders of magnitude apart.")
+    fig.tight_layout(rect=(0, 0, 1, 0.93) if headline else None, pad=0.3)
     fig.savefig(out, dpi=200, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     print(f"wrote {out}")
 
 
-def figure_corridor(out: pathlib.Path, results_dir: str = "results") -> None:
+def figure_corridor(out: pathlib.Path, results_dir: str = "results",
+                    headline: bool = True) -> None:
     """
     End-effector height against the commanded corridor.
 
@@ -225,7 +231,7 @@ def figure_corridor(out: pathlib.Path, results_dir: str = "results") -> None:
         ("fig_corridor_barrier.npz", "transpose, eq. (9) + barrier", "#eb6834", ":"),
         ("fig_corridor_qp.npz",      "hierarchical QP, hard inequality", "#2a78d6", "-"),
     ]
-    fig, ax = plt.subplots(figsize=(8.4, 3.6))
+    fig, ax = plt.subplots(figsize=(8.4, 3.6) if headline else (COL_W, 2.45))
     zmin = zmax = None
     excursions = []
     for fname, label, color, style in runs:
@@ -255,11 +261,12 @@ def figure_corridor(out: pathlib.Path, results_dir: str = "results") -> None:
     ax.set_ylabel("end-effector height z (m)", color=INK_MUTED, fontsize=9)
     ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.005), ncols=2, frameon=False,
               fontsize=9, labelcolor=INK)
-    _headline(fig,
-              "A constraint holds the corridor; a penalty only leans against it",
-              "Shaded band is z \u2208 [0.35, 0.55] m, which the circular reference deliberately "
-              "leaves. Removing the constraint entirely is the control.")
-    fig.tight_layout(rect=(0, 0, 1, 0.88))
+    if headline:
+        _headline(fig,
+                  "A constraint holds the corridor; a penalty only leans against it",
+                  "Shaded band is z \u2208 [0.35, 0.55] m, which the circular reference deliberately "
+                  "leaves. Removing the constraint entirely is the control.")
+    fig.tight_layout(rect=(0, 0, 1, 0.88) if headline else None, pad=0.3)
     fig.savefig(out, dpi=200, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     print(f"wrote {out}")
@@ -267,7 +274,7 @@ def figure_corridor(out: pathlib.Path, results_dir: str = "results") -> None:
 
 def figure_blocked_circle(out: pathlib.Path,
                           npz: str = "results/fig_blocked_circle.npz",
-                          window: int = 25) -> None:
+                          window: int = 25, headline: bool = True) -> None:
     """
     Blocked deflection against the contact force it produces.
 
@@ -304,7 +311,8 @@ def figure_blocked_circle(out: pathlib.Path,
     engaged = d["ee_pos_des"][:, 0] > x_block
 
     c_dx, c_f = "#2a78d6", "#eb6834"
-    fig, ax = plt.subplots(figsize=(8.4, 3.6))
+    fs = 9 if headline else 7.4
+    fig, ax = plt.subplots(figsize=(8.4, 3.6) if headline else (COL_W, 1.85))
     edges = np.diff(np.concatenate(([0], engaged.astype(int), [0])))
     starts, ends = np.where(edges == 1)[0], np.where(edges == -1)[0]
     for i, (a, b) in enumerate(zip(starts, ends)):
@@ -312,31 +320,37 @@ def figure_blocked_circle(out: pathlib.Path,
                    label="reference commands past the obstacle" if i == 0 else None)
     ax.plot(t, dx, color=c_dx, linewidth=1.9, zorder=3, label="blocked deflection $\\Delta x$")
     ax.set_xlabel("time (s)", color=INK_MUTED, fontsize=9)
-    ax.set_ylabel("deflection $\\Delta x$ (mm)", color=c_dx, fontsize=9)
-    ax.tick_params(axis="y", colors=c_dx)
+    ax.set_ylabel("deflection $\\Delta x$ (mm)", color=c_dx, fontsize=fs)
     _style(ax)
+    ax.tick_params(axis="y", colors=c_dx, labelsize=fs, length=0)
+    ax.tick_params(axis="x", labelsize=fs, length=0)
 
     ax2 = ax.twinx()
     ax2.plot(t, fx_s, color=c_f, linewidth=1.9, linestyle="--", zorder=3,
              label="contact force $|F_x|$")
-    ax2.set_ylabel("contact force $|F_x|$ (N)", color=c_f, fontsize=9)
-    ax2.tick_params(axis="y", colors=c_f, labelsize=9, length=0)
+    ax2.set_ylabel("contact force $|F_x|$ (N)", color=c_f, fontsize=fs)
+    ax2.tick_params(axis="y", colors=c_f, labelsize=fs, length=0)
     for side in ("top", "left", "bottom"):
         ax2.spines[side].set_visible(False)
     ax2.spines["right"].set_color(GRID)
 
+    blocked_lbl = ("reference commands past the obstacle" if headline
+                   else "commanded past obstacle")
     handles = [plt.Line2D([], [], color=c_dx, lw=1.9, label="blocked deflection $\\Delta x$"),
                plt.Line2D([], [], color=c_f, lw=1.9, ls="--", label="contact force $|F_x|$"),
-               plt.Rectangle((0, 0), 1, 1, color=INK_MUTED, alpha=0.18,
-                             label="reference commands past the obstacle")]
-    ax.legend(handles=handles, loc="upper center", ncols=3, frameon=False,
-              fontsize=9, labelcolor=INK, bbox_to_anchor=(0.5, 1.02))
-    _headline(fig,
-              "The force follows the deflection: the arm renders the spring it was commanded",
-              f"Shaded: the reference commands past the obstacle face. The arm has no model "
-              f"of it and no avoidance term \u2014 it is blocked, not evading. "
-              f"Correlation {r:.2f}; force is a {window}-step moving average.")
-    fig.tight_layout(rect=(0, 0, 1, 0.90))
+               plt.Rectangle((0, 0), 1, 1, color=INK_MUTED, alpha=0.18, label=blocked_lbl)]
+    # loc must be "lower center" so the box sits ABOVE the axes; "upper center" anchors the
+    # legend's own top edge and hangs it down over the data.
+    ax.legend(handles=handles, loc="lower center", ncols=3 if headline else 2,
+              frameon=False, fontsize=fs, labelcolor=INK,
+              bbox_to_anchor=(0.5, 1.0), columnspacing=1.0, handletextpad=0.5)
+    if headline:
+        _headline(fig,
+                  "The force follows the deflection: the arm renders the spring it was commanded",
+                  f"Shaded: the reference commands past the obstacle face. The arm has no model "
+                  f"of it and no avoidance term \u2014 it is blocked, not evading. "
+                  f"Correlation {r:.2f}; force is a {window}-step moving average.")
+    fig.tight_layout(rect=(0, 0, 1, 0.90) if headline else None, pad=0.3)
     fig.savefig(out, dpi=200, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     print(f"wrote {out}")
@@ -344,7 +358,7 @@ def figure_blocked_circle(out: pathlib.Path,
 
 def figure_singularity(out: pathlib.Path,
                        npz: str = "results/fig_singularity.npz",
-                       sigma_near: float = 1e-2) -> None:
+                       sigma_near: float = 1e-2, headline: bool = True) -> None:
     """
     Jacobian conditioning against torque utilisation as the arm extends toward a singularity.
 
@@ -362,7 +376,7 @@ def figure_singularity(out: pathlib.Path,
     near = sm < sigma_near
 
     c_s, c_u = "#2a78d6", "#eb6834"
-    fig, ax = plt.subplots(figsize=(8.4, 3.6))
+    fig, ax = plt.subplots(figsize=(8.4, 3.6) if headline else (COL_W, 2.45))
     edges = np.diff(np.concatenate(([0], near.astype(int), [0])))
     for i, (a, b) in enumerate(zip(np.where(edges == 1)[0], np.where(edges == -1)[0])):
         ax.axvspan(t[a], t[min(b, len(t) - 1)], color=INK_MUTED, alpha=0.12, zorder=0)
@@ -391,14 +405,15 @@ def figure_singularity(out: pathlib.Path,
     handles = [plt.Line2D([], [], color=c_s, lw=1.9, label=r"$\sigma_{\min}(J)$"),
                plt.Line2D([], [], color=c_u, lw=1.9, ls="--", label="torque utilisation"),
                plt.Rectangle((0, 0), 1, 1, color=INK_MUTED, alpha=0.2,
-                             label=fr"near-singular ($\sigma_{{\min}}<10^{{-2}}$)")]
+                             label=r"near-singular ($\sigma_{\min}<10^{-2}$)")]
     ax.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 1.005), ncols=3,
               frameon=False, fontsize=9, labelcolor=INK)
-    _headline(fig,
-              "The torque bounds hold as the arm drives into a near-singular configuration",
-              f"\u03c3_min falls to {sm.min():.0e} and utilisation touches 1.0 without crossing it. "
-              f"Only the QP is shown: the classical laws do not fail here.")
-    fig.tight_layout(rect=(0, 0, 1, 0.86))
+    if headline:
+        _headline(fig,
+                  "The torque bounds hold as the arm drives into a near-singular configuration",
+                  f"\u03c3_min falls to {sm.min():.0e} and utilisation touches 1.0 without crossing it. "
+                  f"Only the QP is shown: the classical laws do not fail here.")
+    fig.tight_layout(rect=(0, 0, 1, 0.86) if headline else None, pad=0.3)
     fig.savefig(out, dpi=200, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     print(f"wrote {out}")
@@ -421,6 +436,10 @@ def main() -> None:
 
     figure_primary_task(data, out_dir / "fig_primary_task.png", p0_axis)
     figure_torque_bounds(data, out_dir / "fig_torque_bounds.png")
+    figure_priority_residual(data, out_dir / "priority_residual.png", headline=False)
+    figure_corridor(out_dir / "corridor_height.png", headline=False)
+    figure_blocked_circle(out_dir / "blocked_circle_force.png", headline=False)
+    figure_singularity(out_dir / "singularity.png", headline=False)
 
     if args.readme:
         media = pathlib.Path("docs/media")

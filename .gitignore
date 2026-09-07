@@ -31,6 +31,9 @@ logs/
 *.mp4
 *.avi
 
+# ...but the README's figures and clips are deliberate artefacts, not stray renders
+!docs/media/**
+
 # IDE & Editor Configuration
 .idea/
 .vscode/
@@ -40,3 +43,6 @@ logs/
 .DS_Store
 # simulation telemetry
 results/
+
+# Local AI-assistant config, not project work
+CLAUDE.md
